@@ -50,11 +50,15 @@ Either way, from then on every tool works unattended.
 ## Tools
 
 **Session:** `wix_import_login` (decrypt+inject your Chrome Wix cookies — no manual login; macOS), `wix_open_editor`, `wix_status`, `wix_screenshot`
-**Pages:** `wix_list_pages`, `wix_add_page`, `wix_duplicate_page`, `wix_delete_page`, `wix_update_page` (title / slug / SEO title / meta description / hidden / indexable)
-**Content:** `wix_page_structure` (find componentIds + current text), `wix_get_text`, `wix_set_text`, `wix_set_texts` (batch)
+**Pages:** `wix_list_pages`, `wix_add_page`, `wix_duplicate_page`, `wix_delete_page`, `wix_update_page` (title / slug / SEO title / meta description / hidden / indexable), `wix_export_page` (whole-page WML serialization)
+**Content:** `wix_page_structure` (find componentIds + current text; accepts `masterPage` for header/footer), `wix_get_text`, `wix_set_text`, `wix_set_texts` (batch)
+**Images:** `wix_find_images`, `wix_set_image` (swap media uri, set alt text — Builder.Image and classic WPhoto shapes)
+**Links & buttons:** `wix_find_links`, `wix_set_link` (page / external / phone / email / anchor links + button labels)
+**Components:** `wix_copy_component` (serialize+add any component subtree across pages), `wix_delete_component`, `wix_set_layout` (move/resize)
 **Galleries:** `wix_find_galleries` (list Pro Gallery cards `wix_page_structure` can't see), `wix_set_gallery` (retext gallery cards)
-**SEO/schema:** `wix_add_schema` (append JSON-LD structured data to a page)
+**SEO/schema:** `wix_add_schema` (per-page JSON-LD), `wix_site_seo` (site title/description/indexing), `wix_redirects` (301 redirect manager), `wix_head_tags` (site-wide head HTML)
 **Navigation:** `wix_nav_menu`, `wix_nav_add`, `wix_nav_remove`
+**Site & safety:** `wix_undo` / redo, `wix_set_homepage`, `wix_theme` (palette + fonts, to keep generated content on-brand)
 **Persistence:** `wix_save` (draft only), `wix_publish` (LIVE — requires `confirm:true`)
 **Escape hatch:** `wix_eval` (raw JS with `ds` + `e2e` in scope)
 
@@ -83,6 +87,11 @@ Either way, from then on every tool works unattended.
 - **Duplicating a page auto-creates a nav menu item** for it (so skip `wix_nav_add` after a duplicate).
 - **Duplicating a section** (`ds.components.duplicate(sectionRef, pageContainerRef)` — needs the container as 2nd arg) copies its whole subtree, including galleries. When cloning a section for new content, remove any inherited gallery/child you don't want.
 - Changing a WRichText's inline tag (e.g. `<h1>`→`<h2>`) **changes the semantic tag without shrinking the display styling** — a safe way to fix multiple-H1 pages.
+- **Header/footer content does NOT live inside `SITE_HEADER`/`SITE_FOOTER`** (those containers report no children) — it lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`, which is itself walkable via `ds.pages.getReference('masterPage')` from any page. The structure/image/link tools accept `pageId: "masterPage"` for this.
+- Newer image components nest their media under **`data.image` (`Builder.Image`)**; classic `WPhoto` keeps it flat on `data`. Same partial-update trap as richText: send the **full nested `image` object** back with only the changed fields replaced. `wix_set_image` handles both.
+- Component links (buttons, images) take **bare page ids** (`{type:'PageLink', pageId:'abc12'}`) while menu links take **`#`-prefixed ids** (`{type:'PageLink', pageId:'#abc12'}`). Yes, really.
+- `ds.importExport.pages.wml.export(pageRef)` works (note: takes a page *reference*, not an id) and returns `{structure, data, style, version}` — but the matching **`add`/`replace` importers return page pointers without ever materializing content** in the current editor build (three live attempts). Export is exposed as `wix_export_page`; for templating, use `wix_duplicate_page` + `wix_copy_component`.
+- `ds.seo.redirectUrls` is a working 301 redirect manager: `update({'/old':'/new'})`, `remove(['/old'])`, `get()` — verified with a live round-trip.
 
 ## Safety
 

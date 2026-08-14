@@ -1,16 +1,23 @@
 # Roadmap
 
-Gap analysis from introspecting the full `documentServices` surface on a live classic-Editor site (2026-08-14). The 22 shipped tools cover session/login, page CRUD + per-page SEO + JSON-LD, text read/write, Pro Gallery retexting, nav menus, save/publish, screenshot, and `wix_eval`. Everything below exists in the editor's internal API but has no typed tool yet — and (except where noted) **no other API, official or community, can do these on classic sites**.
+Gap analysis from introspecting the full `documentServices` surface on a live classic-Editor site (2026-08-14). Nothing else — official or community — can do these on classic sites. **Update 2026-08-14: waves 1–5 and 7 shipped in v0.2.0** (36 tools total), every call shape verified live on a scratch page.
 
-## Planned tools, impact-first
+## Shipped in v0.2.0
 
-1. **Images** — `wix_find_images` / `wix_set_image` via `ds.components.data.update` on image components, plus media-upload glue (`ds.generalInfo.media.getSiteUploadToken()`). The single biggest content gap: today you can retext a duplicated page but not swap its photos.
-2. **Links & buttons** — `wix_set_link`: point a button or text link at a page / URL / phone. Link data lives in component data.
-3. **Header & footer** — extend `wix_page_structure` with `scope: header|footer|masterPage` via `ds.siteSegments.getHeader()/getFooter()`. Currently header/footer text (phone numbers, footer links) is invisible.
-4. **Component CRUD** — `wix_add_component` / `wix_delete_component` / `wix_set_layout` using `ds.components.add / remove / serialize / setContainer / arrangement` and `ds.components.layout.get/update`. `serialize` + `add` = copy any component between pages. Needs a live verification pass for exact call shapes.
-5. **Site-level SEO, redirects, head tags** — `ds.seo.title/description/keywords/indexing`, `ds.seo.headTags` (site-wide head HTML: verification tags, analytics), and `ds.seo.redirectUrls.get/update/remove` — a full 301 redirect manager.
-6. **Page export/import** — `ds.importExport.pages` / `.components` with `wml`/`eml`/`jsx` formats. Whole-page serialization to markup and back; the killer feature for templating.
-7. **Safety & polish** — `wix_undo` (`ds.history.undo/redo/canUndo`), `wix_set_homepage` (`ds.homePage.set`), favicon, theme read (`ds.theme.colors/fonts` — keep generated content on-brand), page background, lightboxes/popups (`ds.pages.popupPages`), mobile re-optimization (`ds.mobileAlgo.runForPage`), `ds.viewMode` switch.
+1. ✅ **Images** — `wix_find_images` / `wix_set_image` (Builder.Image nested + classic WPhoto flat shapes).
+2. ✅ **Links & buttons** — `wix_find_links` / `wix_set_link` (page/external/phone/email/anchor + labels).
+3. ✅ **Header & footer** — `wix_page_structure` / `wix_find_images` / `wix_find_links` accept `pageId: "masterPage"` (content lives in HeaderSection/FooterSection there, not inside SITE_HEADER — see README gotchas).
+4. ✅ **Component CRUD** — `wix_copy_component` (serialize + add, cross-page), `wix_delete_component`, `wix_set_layout`.
+5. ✅ **Site SEO, redirects, head tags** — `wix_site_seo`, `wix_redirects` (301 manager, live round-trip verified), `wix_head_tags`.
+6. ⚠️ **Page export** — `wix_export_page` ships (WML export verified); **import does not**: `importExport.pages.wml.add/replace` return page pointers but never materialize content in the current editor build (three live attempts). Templating = `wix_duplicate_page` + `wix_copy_component`. Re-test import on future editor builds.
+7. ✅ **Safety & site** — `wix_undo`/redo, `wix_set_homepage`, `wix_theme` (palette + fonts).
+
+## Still open
+
+- **Media upload glue** — `ds.generalInfo.media.getSiteUploadToken()` exists; wiring an upload→place flow would remove the "uri must already be in the media manager" limitation of `wix_set_image`.
+- **Favicon, page background, lightboxes/popups** (`ds.favicon`, `ds.pages.background`, `ds.pages.popupPages`), **mobile re-optimization** (`ds.mobileAlgo.runForPage`), `ds.viewMode` switching — all present in DS, thin wrappers away.
+- **Component styles** — `ds.components.style.get/update` + `ds.components.design` for on-brand restyling beyond layout.
+- **WML import** — revisit `importExport.pages.wml.add/replace` on newer editor builds; it's the missing half of the templating story.
 
 ## Deliberately out of scope
 

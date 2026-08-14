@@ -499,15 +499,17 @@ tool(
   "wix_page_structure",
   "Navigate the editor to a page and return its component tree: componentId, type, and current text for every text element. This is how you find the componentIds to pass to wix_set_text. (The editor must render a page before its components are readable — this tool handles that.)",
   {
-    pageId: z.string(),
+    pageId: z.string().describe("A page id from wix_list_pages, or 'masterPage' for the site header/footer (their content lives in HeaderSection/FooterSection components there, always rendered)"),
     textOnly: z.boolean().optional().describe("If true, return only text components (flat list)"),
   },
   async ({ pageId, textOnly }) => {
     const result = await inEditor(
       async (ds, e2e, { pageId, textOnly }) => {
-        ds.pages.navigateTo(pageId);
-        await ds.waitForChangesAppliedAsync();
-        await new Promise((r) => setTimeout(r, 1500));
+        if (pageId !== "masterPage") {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1500));
+        }
         const pageRef = ds.pages.getReference(pageId);
         const out = [];
         const readText = (ref) => {
@@ -689,6 +691,423 @@ tool(
       },
       { itemId, menuId }
     );
+    return text(result);
+  }
+);
+
+// --- images & links ------------------------------------------------------------
+
+tool(
+  "wix_find_images",
+  "List every image component on a page (or 'masterPage' for header/footer): componentId, current media uri, alt text, dimensions, display mode, and link. Feed componentIds to wix_set_image.",
+  { pageId: z.string() },
+  async ({ pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId }) => {
+        if (pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const out = [];
+        const walk = (r, depth) => {
+          if (depth > 14) return;
+          let t = ""; try { t = ds.components.getType(r).split(".").pop(); } catch (e) {}
+          if (/^(Image|WPhoto|Photo)$/i.test(t)) {
+            try {
+              const d = ds.components.data.get(r);
+              const img = d && d.image ? d.image : d; // Builder.Image nests under .image; classic WPhoto is flat
+              out.push({
+                componentId: r.id,
+                type: t,
+                uri: img && img.uri,
+                alt: img && img.alt,
+                name: img && img.name,
+                width: img && img.width,
+                height: img && img.height,
+                displayMode: d && d.displayMode,
+                link: d && d.link ? { type: d.link.type, pageId: d.link.pageId, url: d.link.url } : null,
+              });
+            } catch (e) { out.push({ componentId: r.id, type: t, error: e.message }); }
+          }
+          let kids = []; try { kids = ds.components.getChildren(r) || []; } catch (e) {}
+          for (const k of kids) walk(k, depth + 1);
+        };
+        walk(ds.pages.getReference(pageId), 0);
+        return out;
+      },
+      { pageId }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_set_image",
+  "Update an image component: swap the media (uri + width/height of the new media file) and/or set alt text. The uri must be a Wix media-manager uri (e.g. 'abc123_….jpg~mv2' — copy one from wix_find_images on a page already using the image, or upload via the Wix dashboard/official MCP first). Handles both Builder.Image (nested) and classic WPhoto (flat) data shapes.",
+  {
+    componentId: z.string(),
+    pageId: z.string().optional(),
+    uri: z.string().optional().describe("Wix media uri; when swapping media also pass the new file's width+height"),
+    alt: z.string().optional(),
+    title: z.string().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+  },
+  async ({ componentId, pageId, ...fields }) => {
+    const result = await inEditor(
+      async (ds, e2e, { componentId, pageId, fields }) => {
+        if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        const ref = { id: componentId, type: "DESKTOP" };
+        const d = ds.components.data.get(ref);
+        if (!d) return { ok: false, error: "no data on component " + componentId };
+        const patch = {};
+        for (const k of ["uri", "alt", "title", "width", "height"]) if (fields[k] !== undefined) patch[k] = fields[k];
+        // GOTCHA (verified): partial nested updates are silently ignored — send the
+        // full nested image object back with only the changed fields replaced.
+        if (d.image) ds.components.data.update(ref, { image: Object.assign({}, d.image, patch) });
+        else ds.components.data.update(ref, patch);
+        await ds.waitForChangesAppliedAsync();
+        const after = ds.components.data.get(ref);
+        const img = after.image || after;
+        return { ok: true, uri: img.uri, alt: img.alt, width: img.width, height: img.height };
+      },
+      { componentId, pageId, fields }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_find_links",
+  "List every linkable component on a page (or 'masterPage'): buttons and any component carrying a link — componentId, label, and current link (page/url/anchor/phone/email). Feed componentIds to wix_set_link.",
+  { pageId: z.string() },
+  async ({ pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId }) => {
+        if (pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const out = [];
+        const walk = (r, depth) => {
+          if (depth > 14) return;
+          let t = ""; try { t = ds.components.getType(r).split(".").pop(); } catch (e) {}
+          try {
+            const d = ds.components.data.get(r);
+            if (d && (d.link !== undefined || typeof d.label === "string")) {
+              const l = d.link;
+              out.push({
+                componentId: r.id,
+                type: t,
+                label: d.label,
+                link: l ? { type: l.type, pageId: l.pageId, url: l.url, anchorName: l.anchorName, phoneNumber: l.phoneNumber, recipient: l.recipient, target: l.target } : null,
+              });
+            }
+          } catch (e) {}
+          let kids = []; try { kids = ds.components.getChildren(r) || []; } catch (e) {}
+          for (const k of kids) walk(k, depth + 1);
+        };
+        walk(ds.pages.getReference(pageId), 0);
+        return out;
+      },
+      { pageId }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_set_link",
+  "Point a button (or any linkable component) somewhere, and/or change its label. link shapes (verified): {type:'PageLink',pageId:'<pageId>'} | {type:'ExternalLink',url,target?:'_blank'} | {type:'PhoneLink',phoneNumber} | {type:'EmailLink',recipient,subject?} | {type:'AnchorLink',anchorName,anchorDataId,pageId}. Pass link:null to remove the link. (Links inside rich text are edited via wix_set_text with <a> HTML instead.)",
+  {
+    componentId: z.string(),
+    pageId: z.string().optional(),
+    label: z.string().optional().describe("New button text"),
+    link: z.record(z.any()).nullable().optional(),
+  },
+  async ({ componentId, pageId, label, link }) => {
+    const result = await inEditor(
+      async (ds, e2e, { componentId, pageId, label, link }) => {
+        if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        const ref = { id: componentId, type: "DESKTOP" };
+        const patch = {};
+        if (label !== undefined) patch.label = label;
+        if (link !== undefined) patch.link = link;
+        if (!Object.keys(patch).length) return { ok: false, error: "nothing to change — pass label and/or link" };
+        ds.components.data.update(ref, patch);
+        await ds.waitForChangesAppliedAsync();
+        const after = ds.components.data.get(ref);
+        return { ok: true, label: after.label, link: after.link ? { type: after.link.type, pageId: after.link.pageId, url: after.link.url } : null };
+      },
+      { componentId, pageId, label, link }
+    );
+    return text(result);
+  }
+);
+
+// --- components ----------------------------------------------------------------
+
+tool(
+  "wix_copy_component",
+  "Copy any component (with its full subtree, data, and style) from one page to another — serialize + add, verified live. Lands in toContainerId (a section/container id from wix_page_structure), or the target page's first Section if omitted. Optional x/y repositions it after the copy.",
+  {
+    fromPageId: z.string(),
+    fromComponentId: z.string(),
+    toPageId: z.string(),
+    toContainerId: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+  },
+  async ({ fromPageId, fromComponentId, toPageId, toContainerId, x, y }) => {
+    const result = await inEditor(
+      async (ds, e2e, { fromPageId, fromComponentId, toPageId, toContainerId, x, y }) => {
+        if (fromPageId !== "masterPage" && ds.pages.getCurrentPageId() !== fromPageId) {
+          ds.pages.navigateTo(fromPageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const ser = ds.components.serialize({ id: fromComponentId, type: "DESKTOP" });
+        if (!ser) return { ok: false, error: "could not serialize " + fromComponentId };
+        if (toPageId !== "masterPage" && ds.pages.getCurrentPageId() !== toPageId) {
+          ds.pages.navigateTo(toPageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        let containerRef = toContainerId ? { id: toContainerId, type: "DESKTOP" } : null;
+        if (!containerRef) {
+          const kids = ds.components.getChildren(ds.pages.getReference(toPageId)) || [];
+          for (const k of kids) {
+            let t = ""; try { t = ds.components.getType(k).split(".").pop(); } catch (e) {}
+            if (/Section|Container/i.test(t)) { containerRef = k; break; }
+          }
+          if (!containerRef) return { ok: false, error: "no section/container found on target page — pass toContainerId" };
+        }
+        const newRef = ds.components.add(containerRef, ser);
+        await ds.waitForChangesAppliedAsync();
+        if (x !== undefined || y !== undefined) {
+          const patch = {};
+          if (x !== undefined) patch.x = x;
+          if (y !== undefined) patch.y = y;
+          ds.components.layout.update(newRef, patch);
+          await ds.waitForChangesAppliedAsync();
+        }
+        let type = ""; try { type = ds.components.getType(newRef); } catch (e) {}
+        return { ok: true, componentId: newRef.id, type, container: containerRef.id };
+      },
+      { fromPageId, fromComponentId, toPageId, toContainerId, x, y }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_delete_component",
+  "Delete a component (and its subtree) from a page. Draft-only until publish; wix_undo can revert it in-session.",
+  { componentId: z.string(), pageId: z.string().optional() },
+  async ({ componentId, pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { componentId, pageId }) => {
+        if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        const ref = { id: componentId, type: "DESKTOP" };
+        let before = ""; try { before = ds.components.getType(ref); } catch (e) { return { ok: false, error: "no such component" }; }
+        await new Promise((res) => { ds.components.remove(ref, res); setTimeout(res, 8000); });
+        await ds.waitForChangesAppliedAsync();
+        let gone = false; try { ds.components.getType(ref); } catch (e) { gone = true; }
+        return { ok: gone, removedType: before };
+      },
+      { componentId, pageId }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_set_layout",
+  "Move/resize a component: any of x, y, width, height, rotationInDegrees. Returns the layout before and after.",
+  {
+    componentId: z.string(),
+    pageId: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    rotationInDegrees: z.number().optional(),
+  },
+  async ({ componentId, pageId, ...patch }) => {
+    const result = await inEditor(
+      async (ds, e2e, { componentId, pageId, patch }) => {
+        if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        const ref = { id: componentId, type: "DESKTOP" };
+        const before = ds.components.layout.get(ref);
+        const clean = {};
+        for (const [k, v] of Object.entries(patch)) if (v !== undefined) clean[k] = v;
+        if (!Object.keys(clean).length) return { layout: before };
+        ds.components.layout.update(ref, clean);
+        await ds.waitForChangesAppliedAsync();
+        const after = ds.components.layout.get(ref);
+        const pick = (l) => ({ x: l.x, y: l.y, width: l.width, height: l.height, rotationInDegrees: l.rotationInDegrees });
+        return { ok: true, before: pick(before), after: pick(after) };
+      },
+      { componentId, pageId, patch }
+    );
+    return text(result);
+  }
+);
+
+// --- site-level SEO, redirects, head tags --------------------------------------
+
+tool(
+  "wix_site_seo",
+  "Get or set SITE-level SEO: default site title, site description, and search-engine indexing on/off. (Per-page SEO lives in wix_update_page.) Call with no args to read current values.",
+  {
+    siteTitle: z.string().optional(),
+    siteDescription: z.string().optional(),
+    indexing: z.boolean().optional().describe("false hides the whole site from search engines"),
+  },
+  async ({ siteTitle, siteDescription, indexing }) => {
+    const result = await inEditor(
+      async (ds, e2e, { siteTitle, siteDescription, indexing }) => {
+        if (siteTitle !== undefined) ds.seo.title.set(siteTitle);
+        if (siteDescription !== undefined) ds.seo.description.set(siteDescription);
+        if (indexing !== undefined) ds.seo.indexing.enable(indexing);
+        await ds.waitForChangesAppliedAsync();
+        return {
+          siteTitle: ds.seo.title.get(),
+          siteDescription: ds.seo.description.get(),
+          indexingEnabled: ds.seo.indexing.isEnabled(),
+        };
+      },
+      { siteTitle, siteDescription, indexing }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_redirects",
+  "Manage the site's 301 redirects (the editor's URL Redirect Manager, verified live). No args lists all. set adds/updates mappings {'/old-path':'/new-path',...}; remove deletes by source path. Redirects go live on publish.",
+  {
+    set: z.record(z.string()).optional().describe("Map of source path -> destination path"),
+    remove: z.array(z.string()).optional().describe("Source paths to delete"),
+  },
+  async ({ set, remove }) => {
+    const result = await inEditor(
+      async (ds, e2e, { set, remove }) => {
+        if (set && Object.keys(set).length) { ds.seo.redirectUrls.update(set); await ds.waitForChangesAppliedAsync(); }
+        if (remove && remove.length) { ds.seo.redirectUrls.remove(remove); await ds.waitForChangesAppliedAsync(); }
+        return { redirects: ds.seo.redirectUrls.get() };
+      },
+      { set, remove }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_head_tags",
+  "Get or set the site-wide custom <head> HTML (verification meta tags, analytics snippets — same field as the dashboard's Custom Code head section). Pass html to REPLACE the whole block (read first, then append to preserve existing tags). No args reads.",
+  { html: z.string().optional() },
+  async ({ html }) => {
+    const result = await inEditor(
+      async (ds, e2e, { html }) => {
+        if (html !== undefined) { ds.seo.headTags.set(html); await ds.waitForChangesAppliedAsync(); }
+        return { headTags: ds.seo.headTags.get() };
+      },
+      { html }
+    );
+    return text(result);
+  }
+);
+
+// --- page export / import (wml) ------------------------------------------------
+
+tool(
+  "wix_export_page",
+  "Serialize a whole page — structure, data, and styles — to a WML object (JSON), for backup, inspection, or diffing. NOTE: the matching import APIs (importExport.pages.wml.add/replace) return page pointers but do not materialize content in the current editor build (verified 2026-08) — to template a page, use wix_duplicate_page + wix_copy_component instead.",
+  { pageId: z.string() },
+  async ({ pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId }) => {
+        // Verified: export takes a page REFERENCE, not a bare id.
+        const wml = ds.importExport.pages.wml.export(ds.pages.getReference(pageId));
+        return wml;
+      },
+      { pageId }
+    );
+    return text(result);
+  }
+);
+
+// (wix_import_page was cut: importExport.pages.wml.add/replace return page pointers but
+// never materialize content in the current editor build — verified with three live
+// attempts, 2026-08. Templating = wix_duplicate_page + wix_copy_component instead.)
+
+// --- site & safety --------------------------------------------------------------
+
+tool(
+  "wix_undo",
+  "Undo (or redo with redo:true) the last editor change in this session — the safety net after a bad component edit or delete.",
+  { redo: z.boolean().optional() },
+  async ({ redo }) => {
+    const result = await inEditor(
+      async (ds, e2e, { redo }) => {
+        const can = redo ? ds.history.canRedo() : ds.history.canUndo();
+        if (!can) return { ok: false, error: redo ? "nothing to redo" : "nothing to undo" };
+        if (redo) ds.history.redo(); else ds.history.undo();
+        await ds.waitForChangesAppliedAsync();
+        return { ok: true, canUndo: ds.history.canUndo(), canRedo: ds.history.canRedo() };
+      },
+      { redo }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_set_homepage",
+  "Change which page is the site's homepage. No args reads the current homepage id.",
+  { pageId: z.string().optional() },
+  async ({ pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId }) => {
+        if (pageId) { ds.homePage.set(pageId); await ds.waitForChangesAppliedAsync(); }
+        const id = ds.homePage.get();
+        const d = ds.pages.data.get(id);
+        return { homePageId: id, title: d && d.title };
+      },
+      { pageId }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_theme",
+  "Read the site's theme palette (color_0…) and font styles (font_0…) — so generated/inserted content can stay on-brand.",
+  {},
+  async () => {
+    const result = await inEditor((ds) => ({
+      colors: ds.theme.colors.getAll(),
+      fonts: ds.theme.fonts.getAll(),
+    }));
     return text(result);
   }
 );
