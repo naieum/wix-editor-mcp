@@ -28,6 +28,12 @@
   ],
   "author": "khuur.dev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naieum/wix-editor-mcp.git"
+  },
+  "bugs": "https://github.com/naieum/wix-editor-mcp/issues",
+  "homepage": "https://github.com/naieum/wix-editor-mcp#readme",
   "engines": {
     "node": ">=18"
   },
