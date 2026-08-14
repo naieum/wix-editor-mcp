@@ -1,0 +1,39 @@
+{
+  "name": "wix-editor-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that drives the Wix (classic/Harmony) Editor via its internal documentServices API — page create/duplicate/delete, text edits, SEO, nav menu, save, publish. Built for sites where Wix offers no page API.",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "wix-editor-mcp": "server.js"
+  },
+  "scripts": {
+    "import-login": "node import-cookies.mjs"
+  },
+  "files": [
+    "server.js",
+    "chrome-cookies.mjs",
+    "import-cookies.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "wix",
+    "wix-editor",
+    "playwright",
+    "automation",
+    "seo"
+  ],
+  "author": "khuur.dev",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "playwright-core": "^1.49.0",
+    "zod": "^3.24.0"
+  }
+}
