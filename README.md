@@ -56,19 +56,119 @@ After either path, every tool works unattended.
 
 ## Tools
 
-**Session:** `wix_import_login` (macOS: decrypts and injects your Chrome Wix cookies, no manual login), `wix_open_editor`, `wix_status`, `wix_screenshot`
-**Pages:** `wix_list_pages`, `wix_add_page`, `wix_duplicate_page`, `wix_delete_page`, `wix_update_page` (title / slug / SEO title / meta description / hidden / indexable), `wix_export_page` (whole-page WML serialization)
-**Content:** `wix_page_structure` (find componentIds and current text, accepts `masterPage` for header/footer), `wix_get_text`, `wix_set_text`, `wix_set_texts` (batch)
-**Images:** `wix_find_images`, `wix_set_image` (swap media uri, set alt text, both Builder.Image and classic WPhoto shapes), `wix_upload_image` (local file or URL → Media Manager, optionally placed on a component in one step)
-**Links & buttons:** `wix_find_links`, `wix_set_link` (page / external / phone / email / anchor links plus button labels)
-**Components:** `wix_copy_component` (serialize and add any component subtree across pages), `wix_delete_component`, `wix_set_layout` (move/resize)
-**Galleries:** `wix_find_galleries` (list Pro Gallery cards that `wix_page_structure` cannot see), `wix_set_gallery` (retext gallery cards)
-**SEO/schema:** `wix_add_schema` (per-page JSON-LD), `wix_site_seo` (site title/description/indexing), `wix_redirects` (301 redirect manager), `wix_head_tags` (site-wide head HTML)
-**Navigation:** `wix_nav_menu`, `wix_nav_add`, `wix_nav_remove`
-**Site & safety:** `wix_undo` / redo, `wix_set_homepage`, `wix_theme` (palette and fonts, to keep generated content on-brand), `wix_favicon`, `wix_page_background`, `wix_popups` (lightboxes: list/add/open/close), `wix_mobile_optimize` (re-run mobile layout after heavy edits), `wix_component_style` (raw style read/write, mind GlobalStyles)
-**CMS & Blog:** `wix_collections` (list/query/get/insert/update/remove Wix Data items), `wix_blog` (list/get/create/update/publish/delete posts), `wix_business_info` (read site business name, hours, locale). These reach the same content as the official Wix REST APIs, but drive it from this server's own editor session (no second login).
-**Persistence:** `wix_save` (draft only), `wix_publish` (LIVE, requires `confirm:true`)
-**Escape hatch:** `wix_eval` (raw JS with `ds` and `e2e` in scope)
+Grouped by what they touch. Every tool is a direct `documentServices` call (or, for CMS/blog/business data, a Wix data-gateway call driven from the same session).
+
+### Session
+
+| Tool | Purpose |
+|---|---|
+| `wix_import_login` | macOS: decrypt and inject your Chrome Wix cookies, no manual login |
+| `wix_open_editor` | Open the editor and wait until it is scriptable |
+| `wix_status` | Report browser, editor, and session state |
+| `wix_screenshot` | PNG of the editor window |
+
+### Pages
+
+| Tool | Purpose |
+|---|---|
+| `wix_list_pages` | List pages: id, title, slug, static/app, hidden, SEO |
+| `wix_add_page` | Create a blank static page |
+| `wix_duplicate_page` | Duplicate a page with its design (auto-adds a nav item) |
+| `wix_delete_page` | Delete a page from the draft |
+| `wix_update_page` | Title, slug, SEO title, meta description, hidden, indexable |
+| `wix_export_page` | Serialize a whole page to WML (JSON) |
+
+### Page content
+
+| Tool | Purpose |
+|---|---|
+| `wix_page_structure` | Component tree and text ids for a page (accepts `masterPage`) |
+| `wix_get_text` | Read one text component |
+| `wix_set_text` | Set one text component's HTML |
+| `wix_set_texts` | Batch-set many components in one call |
+
+### Images
+
+| Tool | Purpose |
+|---|---|
+| `wix_find_images` | List image components: uri, alt, size, link |
+| `wix_set_image` | Swap media uri and/or set alt (Builder.Image and classic WPhoto) |
+| `wix_upload_image` | Upload a local file or URL to the Media Manager |
+
+### Links & buttons
+
+| Tool | Purpose |
+|---|---|
+| `wix_find_links` | List buttons and linkable components |
+| `wix_set_link` | Set a link (page/external/phone/email/anchor) and/or label |
+
+### Components
+
+| Tool | Purpose |
+|---|---|
+| `wix_copy_component` | Copy a component subtree across pages |
+| `wix_delete_component` | Delete a component and its subtree |
+| `wix_set_layout` | Move or resize a component |
+
+### Galleries
+
+| Tool | Purpose |
+|---|---|
+| `wix_find_galleries` | List Pro Gallery cards that `wix_page_structure` misses |
+| `wix_set_gallery` | Retext gallery cards |
+
+### SEO & schema
+
+| Tool | Purpose |
+|---|---|
+| `wix_add_schema` | Add per-page JSON-LD |
+| `wix_site_seo` | Site title, description, indexing |
+| `wix_redirects` | 301 redirect manager |
+| `wix_head_tags` | Site-wide custom `<head>` HTML |
+
+### Navigation
+
+| Tool | Purpose |
+|---|---|
+| `wix_nav_menu` | Read the navigation menus |
+| `wix_nav_add` | Add a page link to a menu |
+| `wix_nav_remove` | Remove a menu item |
+
+### Site & style
+
+| Tool | Purpose |
+|---|---|
+| `wix_undo` | Undo or redo the last change |
+| `wix_set_homepage` | Get or set the homepage |
+| `wix_theme` | Read the palette and fonts (keep content on-brand) |
+| `wix_favicon` | Get or set the favicon |
+| `wix_page_background` | Get or set a page background |
+| `wix_popups` | Lightboxes: list/add/open/close |
+| `wix_mobile_optimize` | Re-run mobile layout after heavy edits |
+| `wix_component_style` | Raw style read/write (mind GlobalStyles) |
+
+### CMS, blog & business info
+
+Same content as the official Wix REST APIs, driven from this server's own editor session (no second login).
+
+| Tool | Purpose |
+|---|---|
+| `wix_collections` | Wix Data CMS: list/query/get/insert/update/remove items |
+| `wix_blog` | Blog posts: list/get/create/update/publish/delete |
+| `wix_business_info` | Read business name, hours, locale (read-only) |
+
+### Persistence
+
+| Tool | Purpose |
+|---|---|
+| `wix_save` | Save the draft (no publish) |
+| `wix_publish` | Publish LIVE (requires `confirm:true`) |
+
+### Escape hatch
+
+| Tool | Purpose |
+|---|---|
+| `wix_eval` | Run raw JS with `ds` and `e2e` in scope |
 
 ## The workflow for a new page (proven in production)
 
