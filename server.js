@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * wix-editor-mcp — MCP server that drives the Wix classic ("Harmony"/Odeditor) Editor
- * through its internal documentServices API, reached via Playwright + a real Chrome.
+ * wix-editor-mcp: an MCP server that drives the Wix classic ("Harmony"/Odeditor) Editor
+ * through its internal documentServices API, reached via Playwright and a real Chrome.
  *
- * Why this exists: classic Wix Editor sites have NO public API for creating/editing
- * static pages (the Blog/CMS REST APIs can't touch them). But the editor page itself
+ * Why this exists: classic Wix Editor sites have NO public API for creating or editing
+ * static pages (the Blog/CMS REST APIs cannot touch them). The editor page itself
  * exposes two programmatic surfaces, verified against a live site:
  *   - window.__OdeditorE2EApi__          (top frame; Wix's own E2E-test API)
  *   - window.frames[n].documentServices  (same-origin child frame; the full DS API)
@@ -39,13 +39,20 @@ import { fileURLToPath } from "node:url";
 // ---------------------------------------------------------------------------
 // The editor URL for your site: open the Wix Editor in a browser, copy the address-bar
 // URL (looks like https://<site>.editor.wix.com/edit/od/<id>?metaSiteId=<id>), and set
-// WIX_EDITOR_URL — or pass {url} to the wix_open_editor tool, which remembers it for
+// WIX_EDITOR_URL, or pass {url} to the wix_open_editor tool, which remembers it for
 // the session.
 let editorUrl = process.env.WIX_EDITOR_URL || "";
 const PROFILE_DIR =
   process.env.WIX_PROFILE_DIR || path.join(os.homedir(), ".wix-editor-mcp", "profile");
 const HEADLESS = process.env.WIX_HEADLESS === "1";
 const CHROME_CHANNEL = process.env.WIX_CHROME_CHANNEL || "chrome";
+
+// The manage.wix.com data gateway (CMS, Blog, site properties) needs a signed app
+// instance token, NOT just the session cookies (cookies alone -> 403). Any app's
+// instance from the editor authorizes the whole gateway. Verified live: the Blog app's
+// instance token works for cloud-data (CMS), the blog API, and site-properties.
+const MANAGE_API = "https://manage.wix.com/_api";
+const AUTH_APP_DEF_ID = "14bcded7-0066-7c35-14d7-466cb3f09103"; // Wix Blog
 
 // ---------------------------------------------------------------------------
 // Browser lifecycle
@@ -95,7 +102,7 @@ async function waitForDs(timeoutMs) {
 /**
  * Make sure the editor is open and documentServices is live.
  * Handles: browser not launched, tab navigated away, and the Wix login wall
- * (first run with a fresh profile — the user logs in once in the headed window).
+ * (first run with a fresh profile: the user logs in once in the headed window).
  */
 async function ensureEditor(loginWaitMs = 0) {
   if (!context || !page || page.isClosed()) {
@@ -126,7 +133,7 @@ async function ensureEditor(loginWaitMs = 0) {
   }
   throw new Error(
     atLogin
-      ? `Wix wants a login (currently at ${url}). A Chrome window is open — log in there once (the session persists in ${PROFILE_DIR}), then call this tool again. Or run wix_open_editor which waits up to 4 minutes for you.`
+      ? `Wix wants a login (currently at ${url}). A Chrome window is open. Log in there once (the session persists in ${PROFILE_DIR}), then call this tool again. Or run wix_open_editor, which waits up to 4 minutes for you.`
       : `Editor did not expose documentServices within the wait (currently at ${url}). Try wix_open_editor, or check the window for an error dialog.`
   );
 }
@@ -145,7 +152,7 @@ async function inEditor(fn, arg = null) {
             if (window.frames[i].documentServices) return window.frames[i].documentServices;
           } catch (e) {}
         }
-        throw new Error("documentServices not found — editor not fully loaded");
+        throw new Error("documentServices not found: editor not fully loaded");
       };
       const fn = new Function(`return (${fnSrc})`)();
       return fn(getDs(), window.__OdeditorE2EApi__, arg);
@@ -155,15 +162,40 @@ async function inEditor(fn, arg = null) {
 }
 
 // Small helpers reused inside page-context functions are inlined there because
-// evaluate() serializes each function — nothing from this module scope survives.
+// evaluate() serializes each function, so nothing from this module scope survives.
 
 const text = (s) => ({ content: [{ type: "text", text: typeof s === "string" ? s : JSON.stringify(s, null, 2) }] });
 const errText = (e) => ({ content: [{ type: "text", text: `Error: ${e.message || e}` }], isError: true });
 
+/**
+ * Call a manage.wix.com/_api service (CMS, Blog, site properties) with the editor
+ * session's auth. Reads a fresh app instance token from the editor (they expire) plus
+ * the XSRF cookie, and reuses Playwright's cookie jar via context.request.
+ * apiPath is relative to /_api (or an absolute https URL). Throws on non-2xx.
+ */
+async function wixManageApi(method, apiPath, { body, headers } = {}) {
+  await ensureEditor();
+  const instance = await inEditor((ds, e2e, app) => ds.tpa.app.getDataByAppDefId(app).instance, AUTH_APP_DEF_ID);
+  if (!instance) throw new Error("Could not read an app instance token from the editor. Is the site fully loaded? Try wix_open_editor.");
+  const cookies = await context.cookies("https://manage.wix.com");
+  const xsrf = (cookies.find((c) => c.name === "XSRF-TOKEN") || {}).value || "";
+  const url = apiPath.startsWith("http") ? apiPath : `${MANAGE_API}/${apiPath}`;
+  const opts = { headers: { Authorization: instance, "X-XSRF-TOKEN": xsrf, "Content-Type": "application/json", ...headers } };
+  if (body !== undefined) opts.data = body;
+  const resp = await context.request[method](url, opts);
+  const t = await resp.text();
+  let j; try { j = JSON.parse(t); } catch (e) { j = t; }
+  if (!resp.ok()) {
+    const msg = j && j.message ? j.message : typeof j === "string" ? j.slice(0, 200) : JSON.stringify(j).slice(0, 200);
+    throw new Error(`Wix API ${method.toUpperCase()} ${apiPath} → HTTP ${resp.status()}: ${msg}`);
+  }
+  return j;
+}
+
 // ---------------------------------------------------------------------------
 // MCP server + tools
 // ---------------------------------------------------------------------------
-const server = new McpServer({ name: "wix-editor", version: "0.1.0" });
+const server = new McpServer({ name: "wix-editor", version: "0.4.0" });
 
 function tool(name, description, schema, handler) {
   server.registerTool(name, { description, inputSchema: schema }, async (args) => {
@@ -188,11 +220,11 @@ tool(
     if (!cookies.length) throw new Error(`No *.wix.com cookies found in Chrome profile "${profile}". If your Wix login lives in another profile (e.g. 'Profile 1'), pass chromeProfile or set WIX_CHROME_PROFILE.`);
     if (!context || !page || page.isClosed()) await launch();
     await context.addCookies(cookies);
-    if (!editorUrl) return text(`Imported ${cookies.length} Wix cookies. No editor URL configured yet — call wix_open_editor with {url} (or set WIX_EDITOR_URL) to open the editor.`);
+    if (!editorUrl) return text(`Imported ${cookies.length} Wix cookies. No editor URL configured yet. Call wix_open_editor with {url} (or set WIX_EDITOR_URL) to open the editor.`);
     // Load the editor with the freshly injected session.
     await page.goto(editorUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
     const ok = await waitForDs(90_000);
-    if (!ok) throw new Error(`Injected ${cookies.length} cookies but editor still isn't scriptable (at ${page.url()}). Session may be expired — log in to Wix once in that Chrome profile, then re-run.`);
+    if (!ok) throw new Error(`Injected ${cookies.length} cookies but the editor still is not scriptable (at ${page.url()}). The session may be expired. Log in to Wix once in that Chrome profile, then re-run.`);
     const pages = await inEditor((ds) => ds.pages.getPagesData().map((p) => p.title));
     return text(`Imported ${cookies.length} Wix cookies and opened the editor logged in. Pages: ${pages.join(", ")}`);
   }
@@ -200,7 +232,7 @@ tool(
 
 tool(
   "wix_open_editor",
-  "Open (or re-open) the Wix Editor in the managed Chrome window and wait for it to be scriptable. First run on a fresh profile shows the Wix login — log in once in that window; this tool waits up to 4 minutes. Optional url sets/overrides the editor URL for the whole session (grab it from the address bar of the Wix Editor: https://<site>.editor.wix.com/edit/od/…?metaSiteId=…).",
+  "Open (or re-open) the Wix Editor in the managed Chrome window and wait for it to be scriptable. First run on a fresh profile shows the Wix login. Log in once in that window; this tool waits up to 4 minutes. Optional url sets or overrides the editor URL for the whole session (grab it from the address bar of the Wix Editor: https://<site>.editor.wix.com/edit/od/…?metaSiteId=…).",
   { url: z.string().optional() },
   async ({ url }) => {
     if (url) {
@@ -298,7 +330,7 @@ tool(
 
 tool(
   "wix_duplicate_page",
-  "Duplicate an existing page (keeps its sections/design — the practical way to make consistent new pages), then optionally retitle/re-slug it. Returns the new pageId. Use wix_page_structure + wix_set_texts afterwards to replace the copy.",
+  "Duplicate an existing page (it keeps the sections and design, the practical way to make consistent new pages), then optionally retitle or re-slug it. Returns the new pageId. Use wix_page_structure and wix_set_texts afterwards to replace the copy.",
   {
     pageId: z.string(),
     title: z.string().optional(),
@@ -328,7 +360,7 @@ tool(
 
 tool(
   "wix_delete_page",
-  "Delete a page from the draft. Irreversible after save+publish — double-check the pageId against wix_list_pages first.",
+  "Delete a page from the draft. This is irreversible after save and publish, so double-check the pageId against wix_list_pages first.",
   { pageId: z.string() },
   async ({ pageId }) => {
     const result = await inEditor(
@@ -411,7 +443,7 @@ tool(
 
 tool(
   "wix_add_schema",
-  "Add a JSON-LD structured-data block (schema.org) to a page — appended to advancedSeoData as a <script type=\"application/ld+json\"> tag, the same place Wix's SEO panel stores 'Structured data markup'. Pass the schema as a JSON object. displayName labels it in the Wix SEO UI. Ideal for per-page Service + FAQPage schema on city/service pages.",
+  "Add a JSON-LD structured-data block (schema.org) to a page. It is appended to advancedSeoData as a <script type=\"application/ld+json\"> tag, the same place Wix's SEO panel stores 'Structured data markup'. Pass the schema as a JSON object. displayName labels it in the Wix SEO UI. Good for per-page Service and FAQPage schema on city/service pages.",
   {
     pageId: z.string(),
     displayName: z.string().describe("Label for this markup, e.g. 'Service - Fort Worth'"),
@@ -441,7 +473,7 @@ tool(
 
 tool(
   "wix_set_gallery",
-  "Retext a Pro Gallery (FastGallery) — the numbered image cards whose title/description live in the component's data.items, NOT as child text components (so wix_page_structure can't see them). Find galleryId via wix_find_galleries. Provide items in order; each {title, description} updates the matching card, preserving its image.",
+  "Retext a Pro Gallery (FastGallery). These are the numbered image cards whose title and description live in the component's data.items, NOT as child text components (so wix_page_structure cannot see them). Find galleryId via wix_find_galleries. Provide items in order; each {title, description} updates the matching card and keeps its image.",
   {
     pageId: z.string(),
     galleryId: z.string(),
@@ -467,7 +499,7 @@ tool(
 
 tool(
   "wix_find_galleries",
-  "List every Pro Gallery (FastGallery) on a page with its galleryId and current card titles — so you can spot galleries that wix_page_structure misses and feed their ids to wix_set_gallery.",
+  "List every Pro Gallery (FastGallery) on a page with its galleryId and current card titles, so you can spot galleries that wix_page_structure misses and feed their ids to wix_set_gallery.",
   { pageId: z.string() },
   async ({ pageId }) => {
     const result = await inEditor(
@@ -498,7 +530,7 @@ tool(
 
 tool(
   "wix_page_structure",
-  "Navigate the editor to a page and return its component tree: componentId, type, and current text for every text element. This is how you find the componentIds to pass to wix_set_text. (The editor must render a page before its components are readable — this tool handles that.)",
+  "Navigate the editor to a page and return its component tree: componentId, type, and current text for every text element. This is how you find the componentIds to pass to wix_set_text. (The editor must render a page before its components are readable; this tool handles that.)",
   {
     pageId: z.string().describe("A page id from wix_list_pages, or 'masterPage' for the site header/footer (their content lives in HeaderSection/FooterSection components there, always rendered)"),
     textOnly: z.boolean().optional().describe("If true, return only text components (flat list)"),
@@ -613,7 +645,7 @@ tool(
 
 tool(
   "wix_set_texts",
-  "Batch version of wix_set_text: replace the text of many components on one page in a single call — the efficient way to retext a duplicated page. Each edit: {componentId, html}.",
+  "Batch version of wix_set_text: replace the text of many components on one page in a single call, the efficient way to retext a duplicated page. Each edit: {componentId, html}.",
   {
     pageId: z.string(),
     edits: z.array(z.object({ componentId: z.string(), html: z.string() })),
@@ -679,7 +711,7 @@ tool(
 
 tool(
   "wix_nav_remove",
-  "Remove an item from a navigation menu. NOTE: requires BOTH menuId and itemId — verified that the 1-arg form silently does nothing.",
+  "Remove an item from a navigation menu. NOTE: it requires BOTH menuId and itemId. Verified: the 1-arg form silently does nothing.",
   { itemId: z.string(), menuId: z.string().optional() },
   async ({ itemId, menuId }) => {
     const result = await inEditor(
@@ -757,7 +789,7 @@ async function setImageImpl(componentId, pageId, fields) {
         if (!d) return { ok: false, error: "no data on component " + componentId };
         const patch = {};
         for (const k of ["uri", "alt", "title", "width", "height"]) if (fields[k] !== undefined) patch[k] = fields[k];
-        // GOTCHA (verified): partial nested updates are silently ignored — send the
+        // GOTCHA (verified): partial nested updates are silently ignored. Send the
         // full nested image object back with only the changed fields replaced.
         if (d.image) ds.components.data.update(ref, { image: Object.assign({}, d.image, patch) });
         else ds.components.data.update(ref, patch);
@@ -772,7 +804,7 @@ async function setImageImpl(componentId, pageId, fields) {
 
 tool(
   "wix_set_image",
-  "Update an image component: swap the media (uri + width/height of the new media file) and/or set alt text. The uri must be a Wix media-manager uri (e.g. 'abc123_….jpg~mv2' — from wix_find_images, or upload a new file with wix_upload_image). Handles both Builder.Image (nested) and classic WPhoto (flat) data shapes.",
+  "Update an image component: swap the media (uri plus width/height of the new media file) and/or set alt text. The uri must be a Wix media-manager uri (e.g. 'abc123_….jpg~mv2', from wix_find_images, or upload a new file with wix_upload_image). Handles both Builder.Image (nested) and classic WPhoto (flat) data shapes.",
   {
     componentId: z.string(),
     pageId: z.string().optional(),
@@ -787,7 +819,7 @@ tool(
 
 tool(
   "wix_upload_image",
-  "Upload an image into the site's Wix Media Manager from a local file path or a URL — returns the media uri + dimensions ready for wix_set_image. Pass componentId (+ pageId) to also place it on an image component in one step. Uses the editor session's upload token + cookies (verified live).",
+  "Upload an image into the site's Wix Media Manager from a local file path or a URL. Returns the media uri and dimensions, ready for wix_set_image. Pass componentId (and pageId) to also place it on an image component in one step. Uses the editor session's upload token and cookies (verified live).",
   {
     filePath: z.string().optional().describe("Absolute path to a local image file"),
     url: z.string().optional().describe("Image URL to fetch and upload"),
@@ -842,7 +874,7 @@ tool(
 
 tool(
   "wix_find_links",
-  "List every linkable component on a page (or 'masterPage'): buttons and any component carrying a link — componentId, label, and current link (page/url/anchor/phone/email). Feed componentIds to wix_set_link.",
+  "List every linkable component on a page (or 'masterPage'): buttons and any component carrying a link, with its componentId, label, and current link (page/url/anchor/phone/email). Feed componentIds to wix_set_link.",
   { pageId: z.string() },
   async ({ pageId }) => {
     const result = await inEditor(
@@ -901,7 +933,7 @@ tool(
         const patch = {};
         if (label !== undefined) patch.label = label;
         if (link !== undefined) patch.link = link;
-        if (!Object.keys(patch).length) return { ok: false, error: "nothing to change — pass label and/or link" };
+        if (!Object.keys(patch).length) return { ok: false, error: "nothing to change: pass label and/or link" };
         ds.components.data.update(ref, patch);
         await ds.waitForChangesAppliedAsync();
         const after = ds.components.data.get(ref);
@@ -917,7 +949,7 @@ tool(
 
 tool(
   "wix_copy_component",
-  "Copy any component (with its full subtree, data, and style) from one page to another — serialize + add, verified live. Lands in toContainerId (a section/container id from wix_page_structure), or the target page's first Section if omitted. Optional x/y repositions it after the copy.",
+  "Copy any component (with its full subtree, data, and style) from one page to another. It serializes then adds, verified live. It lands in toContainerId (a section/container id from wix_page_structure), or the target page's first Section if omitted. Optional x/y repositions it after the copy.",
   {
     fromPageId: z.string(),
     fromComponentId: z.string(),
@@ -948,7 +980,7 @@ tool(
             let t = ""; try { t = ds.components.getType(k).split(".").pop(); } catch (e) {}
             if (/Section|Container/i.test(t)) { containerRef = k; break; }
           }
-          if (!containerRef) return { ok: false, error: "no section/container found on target page — pass toContainerId" };
+          if (!containerRef) return { ok: false, error: "no section/container found on target page: pass toContainerId" };
         }
         const newRef = ds.components.add(containerRef, ser);
         await ds.waitForChangesAppliedAsync();
@@ -1081,7 +1113,7 @@ tool(
 
 tool(
   "wix_head_tags",
-  "Get or set the site-wide custom <head> HTML (verification meta tags, analytics snippets — same field as the dashboard's Custom Code head section). Pass html to REPLACE the whole block (read first, then append to preserve existing tags). No args reads.",
+  "Get or set the site-wide custom <head> HTML (verification meta tags, analytics snippets, the same field as the dashboard's Custom Code head section). Pass html to REPLACE the whole block (read first, then append to preserve existing tags). No args reads.",
   { html: z.string().optional() },
   async ({ html }) => {
     const result = await inEditor(
@@ -1099,7 +1131,7 @@ tool(
 
 tool(
   "wix_export_page",
-  "Serialize a whole page — structure, data, and styles — to a WML object (JSON), for backup, inspection, or diffing. NOTE: the matching import APIs (importExport.pages.wml.add/replace) return page pointers but do not materialize content in the current editor build (verified 2026-08) — to template a page, use wix_duplicate_page + wix_copy_component instead.",
+  "Serialize a whole page (structure, data, and styles) to a WML object (JSON), for backup, inspection, or diffing. NOTE: the matching import APIs (importExport.pages.wml.add/replace) return page pointers but do not materialize content in the current editor build (verified 2026-08). To template a page, use wix_duplicate_page plus wix_copy_component instead.",
   { pageId: z.string() },
   async ({ pageId }) => {
     const result = await inEditor(
@@ -1115,14 +1147,14 @@ tool(
 );
 
 // (wix_import_page was cut: importExport.pages.wml.add/replace return page pointers but
-// never materialize content in the current editor build — verified with three live
+// never materialize content in the current editor build. Verified with three live
 // attempts, 2026-08. Templating = wix_duplicate_page + wix_copy_component instead.)
 
 // --- site & safety --------------------------------------------------------------
 
 tool(
   "wix_undo",
-  "Undo (or redo with redo:true) the last editor change in this session — the safety net after a bad component edit or delete.",
+  "Undo (or redo with redo:true) the last editor change in this session. The safety net after a bad component edit or delete.",
   { redo: z.boolean().optional() },
   async ({ redo }) => {
     const result = await inEditor(
@@ -1159,7 +1191,7 @@ tool(
 
 tool(
   "wix_theme",
-  "Read the site's theme palette (color_0…) and font styles (font_0…) — so generated/inserted content can stay on-brand.",
+  "Read the site's theme palette (color_0…) and font styles (font_0…), so generated or inserted content can stay on-brand.",
   {},
   async () => {
     const result = await inEditor((ds) => ({
@@ -1218,7 +1250,7 @@ tool(
 
 tool(
   "wix_popups",
-  "Manage lightboxes/popups (promo modals, announcements). action 'list' shows all popups; 'add' creates a blank one (returns its pageId — then fill it with wix_copy_component/wix_set_texts and open it to inspect); 'open'/'close' toggle a popup in the editor view. Delete a popup with wix_delete_page (popups are pages).",
+  "Manage lightboxes/popups (promo modals, announcements). action 'list' shows all popups; 'add' creates a blank one (returns its pageId, then fill it with wix_copy_component/wix_set_texts and open it to inspect); 'open'/'close' toggle a popup in the editor view. Delete a popup with wix_delete_page (popups are pages).",
   {
     action: z.enum(["list", "add", "open", "close"]),
     popupId: z.string().optional().describe("Required for open"),
@@ -1254,7 +1286,7 @@ tool(
 
 tool(
   "wix_mobile_optimize",
-  "Re-run Wix's automatic mobile layout algorithm for a page (verified live) — do this after heavy desktop edits (copied components, new sections) so the mobile view re-flows instead of keeping the inherited layout.",
+  "Re-run Wix's automatic mobile layout algorithm for a page (verified live). Do this after heavy desktop edits (copied components, new sections) so the mobile view re-flows instead of keeping the inherited layout.",
   { pageId: z.string() },
   async ({ pageId }) => {
     const result = await inEditor(
@@ -1276,7 +1308,7 @@ tool(
 
 tool(
   "wix_component_style",
-  "Get or update a component's style object (colors, borders, fonts — the raw editor style). CAUTION: many components share a GlobalStyle (style.type === 'GlobalStyle', e.g. 'button-primary') — updating one restyles every component using it, site-wide. Read first; to restyle just one component, modify a copy via wix_eval with ds.components.style.fork(ref) before updating.",
+  "Get or update a component's style object (colors, borders, fonts: the raw editor style). CAUTION: many components share a GlobalStyle (style.type === 'GlobalStyle', e.g. 'button-primary'), so updating one restyles every component using it, site-wide. Read first; to restyle just one component, modify a copy via wix_eval with ds.components.style.fork(ref) before updating.",
   {
     componentId: z.string(),
     pageId: z.string().optional(),
@@ -1300,6 +1332,145 @@ tool(
       { componentId, pageId, style }
     );
     return text(result);
+  }
+);
+
+// --- CMS / blog / business info (manage.wix.com data gateway) -------------------
+// These cover the content the classic Editor's documentServices cannot reach: the same
+// ground as the official Wix MCP and REST APIs, but driven from THIS server's already
+// authenticated editor session (no second OAuth). All call shapes verified live 2026-08.
+
+tool(
+  "wix_collections",
+  "Read/write the site's CMS (Wix Data) collections, the content documentServices cannot touch. action 'list' returns every collection with its fields; 'query' lists items (optional filter/sort/paging); 'get' one item by id; 'insert' a new item (data = field map); 'update' merges data into an existing item (it fetches current first, so partial fields are safe); 'remove' deletes an item. Items are LIVE data: an item bound to a dynamic page appears on the site at once, no publish needed.",
+  {
+    action: z.enum(["list", "query", "get", "insert", "update", "remove"]),
+    collectionId: z.string().optional().describe("Collection id (from action 'list'). Required for all but 'list'."),
+    itemId: z.string().optional().describe("Item _id. Required for get/update/remove."),
+    data: z.record(z.any()).optional().describe("Field map for insert/update, e.g. {title:'…', slug:'…'}"),
+    filter: z.record(z.any()).optional().describe("Wix Data filter for query, e.g. {pageType:'city'}"),
+    sort: z.array(z.any()).optional().describe("Wix Data sort array for query, e.g. [{fieldName:'title',order:'ASC'}]"),
+    limit: z.number().optional(),
+    offset: z.number().optional(),
+  },
+  async ({ action, collectionId, itemId, data, filter, sort, limit, offset }) => {
+    const ENV = "LIVE";
+    if (action === "list") {
+      const j = await wixManageApi("get", "cloud-data/v2/collections?paging.offset=0");
+      return text(
+        (j.collections || []).map((c) => ({
+          id: c.id,
+          name: c.displayName,
+          type: c.collectionType,
+          fields: (c.fields || []).map((f) => ({ key: f.key, type: f.type })),
+        }))
+      );
+    }
+    if (!collectionId) throw new Error("collectionId is required for action '" + action + "' (get ids from action 'list').");
+    if (action === "query") {
+      const query = { paging: { limit: limit || 50, offset: offset || 0 } };
+      if (filter) query.filter = filter;
+      if (sort) query.sort = sort;
+      const j = await wixManageApi("post", "cloud-data/v2/items/query", { body: { dataCollectionId: collectionId, query, environment: ENV } });
+      return text((j.dataItems || []).map((d) => d.data));
+    }
+    if (action === "get") {
+      if (!itemId) throw new Error("itemId is required for 'get'.");
+      const j = await wixManageApi("get", `cloud-data/v2/items/${encodeURIComponent(itemId)}?dataCollectionId=${encodeURIComponent(collectionId)}&environment=${ENV}`);
+      return text(j.dataItem ? j.dataItem.data : j);
+    }
+    if (action === "insert") {
+      if (!data) throw new Error("data is required for 'insert'.");
+      const j = await wixManageApi("post", "cloud-data/v2/items", { body: { dataCollectionId: collectionId, dataItem: { data }, environment: ENV } });
+      return text({ ok: true, item: j.dataItem ? j.dataItem.data : j });
+    }
+    if (action === "update") {
+      if (!itemId || !data) throw new Error("itemId and data are required for 'update'.");
+      // Update (PUT) replaces the whole item. Fetch current data and merge so partial
+      // field updates do not wipe the rest.
+      const cur = await wixManageApi("get", `cloud-data/v2/items/${encodeURIComponent(itemId)}?dataCollectionId=${encodeURIComponent(collectionId)}&environment=${ENV}`);
+      const merged = Object.assign({}, cur.dataItem ? cur.dataItem.data : {}, data, { _id: itemId });
+      const j = await wixManageApi("put", `cloud-data/v2/items/${encodeURIComponent(itemId)}`, { body: { dataCollectionId: collectionId, dataItem: { data: merged }, environment: ENV } });
+      return text({ ok: true, item: j.dataItem ? j.dataItem.data : j });
+    }
+    if (action === "remove") {
+      if (!itemId) throw new Error("itemId is required for 'remove'.");
+      await wixManageApi("delete", `cloud-data/v2/items/${encodeURIComponent(itemId)}?dataCollectionId=${encodeURIComponent(collectionId)}&environment=${ENV}`);
+      return text({ ok: true, removed: itemId });
+    }
+  }
+);
+
+tool(
+  "wix_blog",
+  "Read/write Wix Blog posts (also outside documentServices). action 'list' returns published posts (id/title/slug/url); 'get' fetches a post's editable draft by id; 'create' makes a new DRAFT (title required, optional excerpt/richContent); 'update' patches a draft's fields; 'publish' takes a draft live (requires confirm:true); 'delete' removes a draft/post. New posts stay private drafts until you publish. richContent is Wix's Ricos JSON; omit it to create a title-only draft you fill in the dashboard.",
+  {
+    action: z.enum(["list", "get", "create", "update", "publish", "delete"]),
+    postId: z.string().optional().describe("Draft/post id. Required for get/update/publish/delete."),
+    title: z.string().optional(),
+    excerpt: z.string().optional(),
+    richContent: z.record(z.any()).optional().describe("Ricos rich-content JSON for the post body"),
+    fields: z.record(z.any()).optional().describe("Any other draftPost fields (categoryIds, hashtags, seoData, …)"),
+    limit: z.number().optional(),
+    confirm: z.boolean().optional().describe("Must be true for action 'publish'"),
+  },
+  async ({ action, postId, title, excerpt, richContent, fields, limit, confirm }) => {
+    const B = "communities-blog-node-api/v3";
+    if (action === "list") {
+      const j = await wixManageApi("get", `${B}/posts?sort=FEED&paging.limit=${limit || 30}&fieldsets=URL`);
+      return text((j.posts || []).map((p) => ({ id: p.id, title: p.title, slug: p.slug, url: p.url ? (p.url.base || "") + (p.url.path || "") : undefined, firstPublished: p.firstPublishedDate })));
+    }
+    if (action === "get") {
+      if (!postId) throw new Error("postId is required for 'get'.");
+      const j = await wixManageApi("get", `${B}/draft-posts/${encodeURIComponent(postId)}`);
+      return text(j.draftPost || j);
+    }
+    if (action === "create") {
+      if (!title) throw new Error("title is required for 'create'.");
+      const draftPost = Object.assign({ title }, excerpt !== undefined ? { excerpt } : {}, richContent ? { richContent } : {}, fields || {});
+      const j = await wixManageApi("post", `${B}/draft-posts`, { body: { draftPost } });
+      return text({ ok: true, draftId: j.draftPost && j.draftPost.id, title: j.draftPost && j.draftPost.title });
+    }
+    if (action === "update") {
+      if (!postId) throw new Error("postId is required for 'update'.");
+      const patch = Object.assign({ id: postId }, title !== undefined ? { title } : {}, excerpt !== undefined ? { excerpt } : {}, richContent ? { richContent } : {}, fields || {});
+      const paths = Object.keys(patch).filter((k) => k !== "id");
+      if (!paths.length) throw new Error("Nothing to update: pass title, excerpt, richContent, or fields.");
+      const j = await wixManageApi("patch", `${B}/draft-posts/${encodeURIComponent(postId)}`, { body: { draftPost: patch, fieldMask: { paths } } });
+      return text({ ok: true, draftPost: j.draftPost });
+    }
+    if (action === "publish") {
+      if (!postId) throw new Error("postId is required for 'publish'.");
+      if (confirm !== true) return text("Refused: publishing a blog post makes it public. Pass confirm:true to publish.");
+      const j = await wixManageApi("post", `${B}/draft-posts/${encodeURIComponent(postId)}/publish`, { body: {} });
+      return text({ ok: true, result: j });
+    }
+    if (action === "delete") {
+      if (!postId) throw new Error("postId is required for 'delete'.");
+      await wixManageApi("delete", `${B}/draft-posts/${encodeURIComponent(postId)}`);
+      return text({ ok: true, deleted: postId });
+    }
+  }
+);
+
+tool(
+  "wix_business_info",
+  "Read the site's business info (name, description, logo, locale, timezone, currency, categories) from Wix site properties, so generated content can use the real business name and details. Read-only: the site-properties write endpoint rejects every payload shape tried (2026-08), so set these fields in the Wix dashboard (Settings → Business Info).",
+  {},
+  async () => {
+    const j = await wixManageApi("get", "site-properties-service/v4/properties");
+    const p = j.properties || {};
+    return text({
+      businessName: p.businessName,
+      description: p.description,
+      siteDisplayName: p.siteDisplayName,
+      logo: p.logo,
+      locale: p.locale,
+      language: p.language,
+      timeZone: p.timeZone,
+      currency: p.paymentCurrency,
+      categories: p.categories,
+    });
   }
 );
 
@@ -1330,7 +1501,7 @@ tool(
 
 tool(
   "wix_publish",
-  "PUBLISH THE SITE — pushes the current draft LIVE to the public domain (all saved changes, not just yours). Requires confirm:true. Ask the site owner before using unless they've already told you to publish.",
+  "PUBLISH THE SITE. Pushes the current draft LIVE to the public domain (all saved changes, not just yours). Requires confirm:true. Ask the site owner before using unless they have already told you to publish.",
   { confirm: z.boolean().describe("Must be true. Publishing makes the draft public.") },
   async ({ confirm }) => {
     if (confirm !== true) return text("Refused: pass confirm:true to publish. The draft stays unpublished.");
@@ -1339,13 +1510,13 @@ tool(
         new Promise((resolve) => {
           try {
             ds.publish(
-              () => resolve("PUBLISHED — live in ~1-4 min on the CDN"),
+              () => resolve("PUBLISHED. Live in ~1-4 min on the CDN"),
               (e) => resolve("PUBLISH FAILED: " + JSON.stringify(e).slice(0, 300))
             );
           } catch (e) {
             resolve("THREW: " + e.message);
           }
-          setTimeout(() => resolve("TIMEOUT after 120s — check the editor window"), 120_000);
+          setTimeout(() => resolve("TIMEOUT after 120s. Check the editor window"), 120_000);
         })
     );
     return text(result);
@@ -1356,7 +1527,7 @@ tool(
 
 tool(
   "wix_eval",
-  "EXPERT escape hatch: run raw async JavaScript inside the editor with `ds` (documentServices) and `e2e` (__OdeditorE2EApi__) in scope; the value of the final expression is returned (JSON-serializable only). Use for anything the typed tools don't cover — e.g. ds.pages.serialize(id), ds.components.layout, ds.seo.*, ds.history.undo(). Mutations should be followed by `await ds.waitForChangesAppliedAsync()`.",
+  "EXPERT escape hatch: run raw async JavaScript inside the editor with `ds` (documentServices) and `e2e` (__OdeditorE2EApi__) in scope; the value of the final expression is returned (JSON-serializable only). Use for anything the typed tools do not cover, e.g. ds.pages.serialize(id), ds.components.layout, ds.seo.*, ds.history.undo(). Follow mutations with `await ds.waitForChangesAppliedAsync()`.",
   { js: z.string() },
   async ({ js }) => {
     const result = await inEditor(
@@ -1386,5 +1557,5 @@ process.on("SIGINT", async () => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(
-  `wix-editor-mcp ready (editor: ${editorUrl ? editorUrl.slice(0, 60) + "…" : "unset — set WIX_EDITOR_URL or use wix_open_editor {url}"}, profile: ${PROFILE_DIR}, headless: ${HEADLESS})`
+  `wix-editor-mcp ready (editor: ${editorUrl ? editorUrl.slice(0, 60) + "…" : "unset; set WIX_EDITOR_URL or use wix_open_editor {url}"}, profile: ${PROFILE_DIR}, headless: ${HEADLESS})`
 );
