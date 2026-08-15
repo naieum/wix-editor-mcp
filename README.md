@@ -307,15 +307,68 @@ Only read them, with `wix_business_info`. The `site-properties/v4` write endpoin
 
 Internal details behind the FAQ, for anyone dropping to `wix_eval` or extending the server.
 
-- **Two API surfaces.** `documentServices` (`ds`) is in a same-origin child frame. `__OdeditorE2EApi__` (`e2e`, which has `addPage`) is on the top window. `wix_eval` exposes both.
-- **Changes are async.** documentServices applies mutations asynchronously, so reads race. Await `ds.waitForChangesAppliedAsync()` after every mutation.
-- **SEO data shape.** `advancedSeoData` is a JSON *string* holding `{tags:[{type:"title",children},{type:"meta",props:{name:"description",content}},{type:"script",...JSON-LD...}]}`. Via `wix_eval`: parse, edit the tags, `JSON.stringify`, then `ds.pages.data.update(id,{advancedSeoData})`.
-- **Duplicating a section** needs the container as the second arg: `ds.components.duplicate(sectionRef, pageContainerRef)`.
-- **Data-gateway auth.** Session cookies alone get 401/403 on `manage.wix.com/_api`. Read a signed app instance token from the editor (`ds.tpa.app.getDataByAppDefId(appDefId).instance`), send it as `Authorization`, and add the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN`. Any app's instance authorizes the whole gateway.
-- **Media upload** takes two steps: `ds.generalInfo.media.getSiteUploadToken()` in the editor, then a token-and-cookie request to `files.wix.com/site/media/files/upload/url`, then a multipart POST to the returned `upload_url`. The response's `file_name` is the media uri image components want. `wix_upload_image` handles it.
-- **301 redirects:** `ds.seo.redirectUrls` supports `update({'/old':'/new'})`, `remove(['/old'])`, `get()`. Exposed as `wix_redirects`.
-- **Page background:** `ds.pages.background.get(pageId)` throws without a device arg (`'desktop'`/`'mobile'`). That arg is mandatory.
-- **Popups are pages:** `ds.pages.popupPages.add(title)` returns a page pointer, popups show up in `getDataList()`, and `ds.pages.remove(popupId)` deletes them.
+<details>
+<summary><strong>Two API surfaces</strong></summary>
+
+`documentServices` (`ds`) is in a same-origin child frame. `__OdeditorE2EApi__` (`e2e`, which has `addPage`) is on the top window. `wix_eval` exposes both.
+
+</details>
+
+<details>
+<summary><strong>Changes are async</strong></summary>
+
+documentServices applies mutations asynchronously, so reads race. Await `ds.waitForChangesAppliedAsync()` after every mutation.
+
+</details>
+
+<details>
+<summary><strong>SEO data shape</strong></summary>
+
+`advancedSeoData` is a JSON *string* holding `{tags:[{type:"title",children},{type:"meta",props:{name:"description",content}},{type:"script",...JSON-LD...}]}`. Via `wix_eval`: parse, edit the tags, `JSON.stringify`, then `ds.pages.data.update(id,{advancedSeoData})`.
+
+</details>
+
+<details>
+<summary><strong>Duplicating a section</strong></summary>
+
+Needs the container as the second arg: `ds.components.duplicate(sectionRef, pageContainerRef)`.
+
+</details>
+
+<details>
+<summary><strong>Data-gateway auth</strong></summary>
+
+Session cookies alone get 401/403 on `manage.wix.com/_api`. Read a signed app instance token from the editor (`ds.tpa.app.getDataByAppDefId(appDefId).instance`), send it as `Authorization`, and add the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN`. Any app's instance authorizes the whole gateway.
+
+</details>
+
+<details>
+<summary><strong>Media upload</strong></summary>
+
+Takes two steps: `ds.generalInfo.media.getSiteUploadToken()` in the editor, then a token-and-cookie request to `files.wix.com/site/media/files/upload/url`, then a multipart POST to the returned `upload_url`. The response's `file_name` is the media uri image components want. `wix_upload_image` handles it.
+
+</details>
+
+<details>
+<summary><strong>301 redirects</strong></summary>
+
+`ds.seo.redirectUrls` supports `update({'/old':'/new'})`, `remove(['/old'])`, `get()`. Exposed as `wix_redirects`.
+
+</details>
+
+<details>
+<summary><strong>Page background</strong></summary>
+
+`ds.pages.background.get(pageId)` throws without a device arg (`'desktop'`/`'mobile'`). That arg is mandatory.
+
+</details>
+
+<details>
+<summary><strong>Popups are pages</strong></summary>
+
+`ds.pages.popupPages.add(title)` returns a page pointer, popups show up in `getDataList()`, and `ds.pages.remove(popupId)` deletes them.
+
+</details>
 
 ## Safety
 
