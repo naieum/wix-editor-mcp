@@ -170,7 +170,7 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 |---|---|
 | `wix_eval` | Run raw JS with `ds` and `e2e` in scope |
 
-## The workflow for a new page (proven in production)
+## Workflow: create a new page
 
 1. `wix_duplicate_page` an existing designed page with `title` and `slug`. This auto-adds a nav menu item for the new page, so do not also call `wix_nav_add`.
 2. `wix_page_structure {pageId, textOnly:true}` returns text componentIds and current text.
@@ -182,7 +182,9 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 8. `wix_save`, then screenshot to review, then `wix_publish {confirm:true}` when the owner says go.
 9. Verify the live URL (title tag, content, no stray sections) after ~1-2 min propagation.
 
-## Hard-won gotchas (encoded in the tools, listed for `wix_eval` users)
+## API notes (documentServices and the data gateway)
+
+Behaviors of the internal APIs that the tools already account for. Read them before dropping to `wix_eval`, which bypasses the tools.
 
 - `documentServices` lives in a **same-origin child frame**, not the top window. `__OdeditorE2EApi__` (which has `addPage`) is on the top window.
 - **Await `ds.waitForChangesAppliedAsync()` after every mutation.** DS applies changes async, so reads race otherwise.
@@ -197,7 +199,7 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 - A change to a WRichText's inline tag (e.g. `<h1>` to `<h2>`) **changes the semantic tag without shrinking the display styling**. This is a safe way to fix multiple-H1 pages.
 - **Header/footer content does NOT live inside `SITE_HEADER`/`SITE_FOOTER`** (those containers report no children). It lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`. `masterPage` is itself walkable via `ds.pages.getReference('masterPage')` from any page. The structure, image, and link tools accept `pageId: "masterPage"` for this.
 - Newer image components nest their media under **`data.image` (`Builder.Image`)**. Classic `WPhoto` keeps it flat on `data`. Same partial-update trap as richText: send the **full nested `image` object** back with only the changed fields replaced. `wix_set_image` handles both.
-- Component links (buttons, images) take **bare page ids** (`{type:'PageLink', pageId:'abc12'}`). Menu links take **`#`-prefixed ids** (`{type:'PageLink', pageId:'#abc12'}`). Yes, really.
+- Component links (buttons, images) take **bare page ids** (`{type:'PageLink', pageId:'abc12'}`). Menu links take **`#`-prefixed ids** (`{type:'PageLink', pageId:'#abc12'}`).
 - `ds.importExport.pages.wml.export(pageRef)` works (note: it takes a page *reference*, not an id) and returns `{structure, data, style, version}`. But the matching **`add`/`replace` importers return page pointers without ever materializing content** in the current editor build (three live attempts). Export ships as `wix_export_page`. For templating, use `wix_duplicate_page` plus `wix_copy_component`.
 - `ds.seo.redirectUrls` is a working 301 redirect manager: `update({'/old':'/new'})`, `remove(['/old'])`, `get()`. Verified with a live round-trip.
 - **Media upload** takes two steps. Call `ds.generalInfo.media.getSiteUploadToken()` in the editor. Then `GET files.wix.com/site/media/files/upload/url?media_type=picture&site_token=…` **with the browser session's cookies** (401 without them, so the server reuses Playwright's cookie jar). Then multipart-POST the file to the returned `upload_url`. The response's `file_name` is the media uri that image components want.
@@ -216,7 +218,7 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 
 ## Compatibility
 
-Built and verified against the **classic Wix Editor** ("Harmony" / Odeditor) in August 2026. Not for Wix Studio or ADI editors. Their internals differ, though Studio also exposes a documentServices-like surface (PRs welcome). Internal APIs can change without notice. If a tool stops working, `wix_eval` plus the gotchas above are your debugging kit.
+Built and verified against the **classic Wix Editor** ("Harmony" / Odeditor) in August 2026. Not for Wix Studio or ADI editors. Their internals differ, though Studio also exposes a documentServices-like surface (PRs welcome). Internal APIs can change without notice. If a tool stops working, use `wix_eval` with the API notes above to debug.
 
 ## License
 
