@@ -188,45 +188,120 @@ Common questions about Wix quirks the tools already handle. The internal details
 
 ### Text and content
 
-**Why did my text edit silently not apply?** Newer components (`Builder.RichText`) store text at `data.richText.text`. Classic ones use `data.text`. Partial nested updates are ignored, so the full `richText` object must go back with only `.text` changed. `wix_set_text` handles both shapes. Images have the same trap under `data.image`, and `wix_set_image` handles it too.
+<details>
+<summary><strong>Why did my text edit silently not apply?</strong></summary>
 
-**Why don't the tools show my Pro Gallery text?** Pro Gallery (FastGallery) card titles and descriptions live in `component.data.items[]`, not as child text components, so `wix_page_structure` cannot see them. Use `wix_find_galleries` to list the cards and `wix_set_gallery` to edit them.
+Newer components (`Builder.RichText`) store text at `data.richText.text`. Classic ones use `data.text`. Partial nested updates are ignored, so the full `richText` object must go back with only `.text` changed. `wix_set_text` handles both shapes. Images have the same trap under `data.image`, and `wix_set_image` handles it too.
 
-**Why can't I read a page's components?** They are only readable while the editor is rendering that page. The tools call `ds.pages.navigateTo(pageId)` first. Before that you only see the masterPage header and footer.
+</details>
+
+<details>
+<summary><strong>Why don't the tools show my Pro Gallery text?</strong></summary>
+
+Pro Gallery (FastGallery) card titles and descriptions live in `component.data.items[]`, not as child text components, so `wix_page_structure` cannot see them. Use `wix_find_galleries` to list the cards and `wix_set_gallery` to edit them.
+
+</details>
+
+<details>
+<summary><strong>Why can't I read a page's components?</strong></summary>
+
+They are only readable while the editor is rendering that page. The tools call `ds.pages.navigateTo(pageId)` first. Before that you only see the masterPage header and footer.
+
+</details>
 
 ### Pages and sections
 
-**Do I need to add a nav item after duplicating a page?** No. Duplicating a page auto-creates a nav menu item, so do not also call `wix_nav_add`.
+<details>
+<summary><strong>Do I need to add a nav item after duplicating a page?</strong></summary>
 
-**What happens when I duplicate a section?** It copies the whole subtree, galleries included. When you clone a section for new content, remove any inherited gallery or child you do not want with `wix_delete_component`.
+No. Duplicating a page auto-creates a nav menu item, so do not also call `wix_nav_add`.
 
-**How do I edit the header or footer?** Their content is not inside `SITE_HEADER`/`SITE_FOOTER` (those report no children). It lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`. Pass `pageId: "masterPage"` to the structure, image, and link tools.
+</details>
 
-**Can I import or export a page as a file?** Export yes, via `wix_export_page` (WML JSON). Import no: the WML importers return page pointers but do not materialize content in the current editor build. To copy a page's design, use `wix_duplicate_page` plus `wix_copy_component`.
+<details>
+<summary><strong>What happens when I duplicate a section?</strong></summary>
+
+It copies the whole subtree, galleries included. When you clone a section for new content, remove any inherited gallery or child you do not want with `wix_delete_component`.
+
+</details>
+
+<details>
+<summary><strong>How do I edit the header or footer?</strong></summary>
+
+Their content is not inside `SITE_HEADER`/`SITE_FOOTER` (those report no children). It lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`. Pass `pageId: "masterPage"` to the structure, image, and link tools.
+
+</details>
+
+<details>
+<summary><strong>Can I import or export a page as a file?</strong></summary>
+
+Export yes, via `wix_export_page` (WML JSON). Import no: the WML importers return page pointers but do not materialize content in the current editor build. To copy a page's design, use `wix_duplicate_page` plus `wix_copy_component`.
+
+</details>
 
 ### SEO
 
-**Why does my new page show the wrong SEO title?** Wix renders the SEO title and description from `advancedSeoData`, not the legacy `pageTitleSEO`/`descriptionSEO` fields. A duplicated page inherits the source page's tags verbatim (title, description, and schema), so it keeps showing the source's title until you rewrite them. `wix_update_page` and `wix_add_schema` do this for you.
+<details>
+<summary><strong>Why does my new page show the wrong SEO title?</strong></summary>
 
-**How do I fix a page with more than one H1?** Change the rich-text inline tag (e.g. `<h1>` to `<h2>`). That changes the semantic tag without changing the visible size.
+Wix renders the SEO title and description from `advancedSeoData`, not the legacy `pageTitleSEO`/`descriptionSEO` fields. A duplicated page inherits the source page's tags verbatim (title, description, and schema), so it keeps showing the source's title until you rewrite them. `wix_update_page` and `wix_add_schema` do this for you.
+
+</details>
+
+<details>
+<summary><strong>How do I fix a page with more than one H1?</strong></summary>
+
+Change the rich-text inline tag (e.g. `<h1>` to `<h2>`). That changes the semantic tag without changing the visible size.
+
+</details>
 
 ### Links and menus
 
-**Why doesn't my button or menu link work?** They take different id formats. Component links (buttons, images) use bare page ids (`{type:'PageLink', pageId:'abc12'}`). Menu links use `#`-prefixed ids (`{type:'PageLink', pageId:'#abc12'}`).
+<details>
+<summary><strong>Why doesn't my button or menu link work?</strong></summary>
 
-**Why didn't removing a menu item do anything?** `ds.menu.removeItem` needs both `menuId` and `itemId`. The one-argument form silently does nothing. `wix_nav_remove` passes both.
+They take different id formats. Component links (buttons, images) use bare page ids (`{type:'PageLink', pageId:'abc12'}`). Menu links use `#`-prefixed ids (`{type:'PageLink', pageId:'#abc12'}`).
+
+</details>
+
+<details>
+<summary><strong>Why didn't removing a menu item do anything?</strong></summary>
+
+`ds.menu.removeItem` needs both `menuId` and `itemId`. The one-argument form silently does nothing. `wix_nav_remove` passes both.
+
+</details>
 
 ### Styling
 
-**Why did styling one button change all of them?** Many components share a `GlobalStyle` (every primary button uses `button-primary`, for example), so updating it restyles all of them. To change one component only, fork its style first with `ds.components.style.fork(ref)` via `wix_eval`.
+<details>
+<summary><strong>Why did styling one button change all of them?</strong></summary>
+
+Many components share a `GlobalStyle` (every primary button uses `button-primary`, for example), so updating it restyles all of them. To change one component only, fork its style first with `ds.components.style.fork(ref)` via `wix_eval`.
+
+</details>
 
 ### Saving and publishing
 
-**Does saving change the live site?** No. `wix_save` writes the draft only. The public site changes only when you run `wix_publish`, which requires `confirm:true`.
+<details>
+<summary><strong>Does saving change the live site?</strong></summary>
 
-**Are CMS items and new blog posts public right away?** CMS items are live data with no publish step, so a `wix_collections` insert or update shows on the public site at once (an item bound to a dynamic page appears immediately). Blog `create` and `update` act on a private draft. A post goes public only on `wix_blog {action:'publish', confirm:true}`.
+No. `wix_save` writes the draft only. The public site changes only when you run `wix_publish`, which requires `confirm:true`.
 
-**Can I edit the business name, phone, or hours?** Only read them, with `wix_business_info`. The `site-properties/v4` write endpoint rejects every payload shape tried, so set these fields in the Wix dashboard (Settings → Business Info).
+</details>
+
+<details>
+<summary><strong>Are CMS items and new blog posts public right away?</strong></summary>
+
+CMS items are live data with no publish step, so a `wix_collections` insert or update shows on the public site at once (an item bound to a dynamic page appears immediately). Blog `create` and `update` act on a private draft. A post goes public only on `wix_blog {action:'publish', confirm:true}`.
+
+</details>
+
+<details>
+<summary><strong>Can I edit the business name, phone, or hours?</strong></summary>
+
+Only read them, with `wix_business_info`. The `site-properties/v4` write endpoint rejects every payload shape tried, so set these fields in the Wix dashboard (Settings → Business Info).
+
+</details>
 
 ## For `wix_eval` and contributors
 
