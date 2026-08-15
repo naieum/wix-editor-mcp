@@ -29,6 +29,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { chromium } from "playwright-core";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -742,21 +743,10 @@ tool(
   }
 );
 
-tool(
-  "wix_set_image",
-  "Update an image component: swap the media (uri + width/height of the new media file) and/or set alt text. The uri must be a Wix media-manager uri (e.g. 'abc123_….jpg~mv2' — copy one from wix_find_images on a page already using the image, or upload via the Wix dashboard/official MCP first). Handles both Builder.Image (nested) and classic WPhoto (flat) data shapes.",
-  {
-    componentId: z.string(),
-    pageId: z.string().optional(),
-    uri: z.string().optional().describe("Wix media uri; when swapping media also pass the new file's width+height"),
-    alt: z.string().optional(),
-    title: z.string().optional(),
-    width: z.number().optional(),
-    height: z.number().optional(),
-  },
-  async ({ componentId, pageId, ...fields }) => {
-    const result = await inEditor(
-      async (ds, e2e, { componentId, pageId, fields }) => {
+// Shared by wix_set_image and wix_upload_image's place-after-upload step.
+async function setImageImpl(componentId, pageId, fields) {
+  return inEditor(
+    async (ds, e2e, { componentId, pageId, fields }) => {
         if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
           ds.pages.navigateTo(pageId);
           await ds.waitForChangesAppliedAsync();
@@ -775,10 +765,78 @@ tool(
         const after = ds.components.data.get(ref);
         const img = after.image || after;
         return { ok: true, uri: img.uri, alt: img.alt, width: img.width, height: img.height };
-      },
-      { componentId, pageId, fields }
+    },
+    { componentId, pageId, fields }
+  );
+}
+
+tool(
+  "wix_set_image",
+  "Update an image component: swap the media (uri + width/height of the new media file) and/or set alt text. The uri must be a Wix media-manager uri (e.g. 'abc123_….jpg~mv2' — from wix_find_images, or upload a new file with wix_upload_image). Handles both Builder.Image (nested) and classic WPhoto (flat) data shapes.",
+  {
+    componentId: z.string(),
+    pageId: z.string().optional(),
+    uri: z.string().optional().describe("Wix media uri; when swapping media also pass the new file's width+height"),
+    alt: z.string().optional(),
+    title: z.string().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+  },
+  async ({ componentId, pageId, ...fields }) => text(await setImageImpl(componentId, pageId, fields))
+);
+
+tool(
+  "wix_upload_image",
+  "Upload an image into the site's Wix Media Manager from a local file path or a URL — returns the media uri + dimensions ready for wix_set_image. Pass componentId (+ pageId) to also place it on an image component in one step. Uses the editor session's upload token + cookies (verified live).",
+  {
+    filePath: z.string().optional().describe("Absolute path to a local image file"),
+    url: z.string().optional().describe("Image URL to fetch and upload"),
+    name: z.string().optional().describe("File name in the media manager (defaults to the source name)"),
+    alt: z.string().optional().describe("Alt text, applied if componentId is given"),
+    componentId: z.string().optional().describe("Image component to point at the uploaded media"),
+    pageId: z.string().optional(),
+  },
+  async ({ filePath, url, name, alt, componentId, pageId }) => {
+    if (!filePath && !url) throw new Error("Pass filePath or url.");
+    await ensureEditor();
+    let buffer, fileName = name;
+    if (filePath) {
+      buffer = await fs.readFile(filePath);
+      fileName = fileName || path.basename(filePath);
+    } else {
+      const resp = await context.request.get(url);
+      if (!resp.ok()) throw new Error(`Could not fetch ${url}: HTTP ${resp.status()}`);
+      buffer = await resp.body();
+      fileName = fileName || decodeURIComponent(new URL(url).pathname.split("/").pop() || "") || "upload.png";
+    }
+    const mime =
+      { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" }[
+        path.extname(fileName).toLowerCase()
+      ] || "image/png";
+    // Verified flow: in-editor site token -> files.wix.com hands out an upload URL
+    // (requires the session cookies, which context.request shares) -> multipart POST.
+    const token = await inEditor((ds) => Promise.resolve(ds.generalInfo.media.getSiteUploadToken()));
+    const r1 = await context.request.get(
+      "https://files.wix.com/site/media/files/upload/url?media_type=picture&site_token=" + encodeURIComponent(token)
     );
-    return text(result);
+    if (!r1.ok()) throw new Error(`upload_url request failed: HTTP ${r1.status()} ${(await r1.text()).slice(0, 200)}`);
+    const { upload_url, upload_token } = JSON.parse(await r1.text());
+    const multipart = { file: { name: fileName, mimeType: mime, buffer }, media_type: "picture" };
+    if (upload_token) multipart.upload_token = upload_token;
+    const r2 = await context.request.post(upload_url, { multipart });
+    if (!r2.ok()) throw new Error(`upload failed: HTTP ${r2.status()} ${(await r2.text()).slice(0, 200)}`);
+    const [f] = JSON.parse(await r2.text());
+    const uploaded = { uri: f.file_name, width: f.width, height: f.height, name: f.original_file_name };
+    if (componentId) {
+      const placed = await setImageImpl(componentId, pageId, {
+        uri: f.file_name,
+        width: f.width,
+        height: f.height,
+        ...(alt !== undefined ? { alt } : {}),
+      });
+      return text({ uploaded, placed });
+    }
+    return text(uploaded);
   }
 );
 
@@ -1108,6 +1166,139 @@ tool(
       colors: ds.theme.colors.getAll(),
       fonts: ds.theme.fonts.getAll(),
     }));
+    return text(result);
+  }
+);
+
+tool(
+  "wix_favicon",
+  "Get or set the site favicon. Pass uri (a Wix media uri, e.g. from wix_upload_image) to set; no args reads the current value. Goes live on publish.",
+  { uri: z.string().optional() },
+  async ({ uri }) => {
+    const result = await inEditor(
+      async (ds, e2e, { uri }) => {
+        if (uri !== undefined) { ds.favicon.set(uri); await ds.waitForChangesAppliedAsync(); }
+        return { favicon: ds.favicon.get() ?? null };
+      },
+      { uri }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_page_background",
+  "Get or set a page's background (verified live). No background arg reads. To set, either pass color (a hex value or theme token like '{color_11}') as a shortcut, or a full background object as returned by a get (its .ref holds color/fittingType/scrollType/mediaRef).",
+  {
+    pageId: z.string(),
+    device: z.enum(["desktop", "mobile"]).optional(),
+    color: z.string().optional(),
+    background: z.record(z.any()).optional().describe("Full background object (as returned by this tool) to write back"),
+  },
+  async ({ pageId, device, color, background }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId, device, color, background }) => {
+        const dev = device || "desktop";
+        if (background) {
+          ds.pages.background.update(pageId, background, dev);
+          await ds.waitForChangesAppliedAsync();
+        } else if (color !== undefined) {
+          const bg = JSON.parse(JSON.stringify(ds.pages.background.get(pageId, dev)));
+          bg.ref.color = color;
+          ds.pages.background.update(pageId, bg, dev);
+          await ds.waitForChangesAppliedAsync();
+        }
+        return ds.pages.background.get(pageId, dev);
+      },
+      { pageId, device, color, background }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_popups",
+  "Manage lightboxes/popups (promo modals, announcements). action 'list' shows all popups; 'add' creates a blank one (returns its pageId — then fill it with wix_copy_component/wix_set_texts and open it to inspect); 'open'/'close' toggle a popup in the editor view. Delete a popup with wix_delete_page (popups are pages).",
+  {
+    action: z.enum(["list", "add", "open", "close"]),
+    popupId: z.string().optional().describe("Required for open"),
+    title: z.string().optional().describe("Title for add"),
+  },
+  async ({ action, popupId, title }) => {
+    const result = await inEditor(
+      async (ds, e2e, { action, popupId, title }) => {
+        if (action === "add") {
+          const ref = ds.pages.popupPages.add(title || "New Popup");
+          await ds.waitForChangesAppliedAsync();
+          const id = (ref && (ref.pageId || ref.id)) || ref;
+          return { ok: true, popupId: id, popups: ds.pages.popupPages.getDataList().map((p) => ({ id: p.id, title: p.title })) };
+        }
+        if (action === "open") {
+          if (!popupId) return { ok: false, error: "popupId required" };
+          ds.pages.popupPages.open(popupId);
+          await ds.waitForChangesAppliedAsync();
+          return { ok: true, current: ds.pages.popupPages.getCurrentPopupId() };
+        }
+        if (action === "close") {
+          ds.pages.popupPages.close();
+          await ds.waitForChangesAppliedAsync();
+          return { ok: true };
+        }
+        return { popups: ds.pages.popupPages.getDataList().map((p) => ({ id: p.id, title: p.title, hidePage: !!p.hidePage })) };
+      },
+      { action, popupId, title }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_mobile_optimize",
+  "Re-run Wix's automatic mobile layout algorithm for a page (verified live) — do this after heavy desktop edits (copied components, new sections) so the mobile view re-flows instead of keeping the inherited layout.",
+  { pageId: z.string() },
+  async ({ pageId }) => {
+    const result = await inEditor(
+      async (ds, e2e, { pageId }) => {
+        if (pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        await Promise.resolve(ds.mobileAlgo.runForPage(pageId));
+        await ds.waitForChangesAppliedAsync();
+        return { ok: true, pageId };
+      },
+      { pageId }
+    );
+    return text(result);
+  }
+);
+
+tool(
+  "wix_component_style",
+  "Get or update a component's style object (colors, borders, fonts — the raw editor style). CAUTION: many components share a GlobalStyle (style.type === 'GlobalStyle', e.g. 'button-primary') — updating one restyles every component using it, site-wide. Read first; to restyle just one component, modify a copy via wix_eval with ds.components.style.fork(ref) before updating.",
+  {
+    componentId: z.string(),
+    pageId: z.string().optional(),
+    style: z.record(z.any()).optional().describe("Full style object to write back (as returned by a get)"),
+  },
+  async ({ componentId, pageId, style }) => {
+    const result = await inEditor(
+      async (ds, e2e, { componentId, pageId, style }) => {
+        if (pageId && pageId !== "masterPage" && ds.pages.getCurrentPageId() !== pageId) {
+          ds.pages.navigateTo(pageId);
+          await ds.waitForChangesAppliedAsync();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        const ref = { id: componentId, type: "DESKTOP" };
+        if (style) {
+          ds.components.style.update(ref, style);
+          await ds.waitForChangesAppliedAsync();
+        }
+        return ds.components.style.get(ref);
+      },
+      { componentId, pageId, style }
+    );
     return text(result);
   }
 );

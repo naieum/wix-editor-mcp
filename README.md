@@ -52,13 +52,13 @@ Either way, from then on every tool works unattended.
 **Session:** `wix_import_login` (decrypt+inject your Chrome Wix cookies — no manual login; macOS), `wix_open_editor`, `wix_status`, `wix_screenshot`
 **Pages:** `wix_list_pages`, `wix_add_page`, `wix_duplicate_page`, `wix_delete_page`, `wix_update_page` (title / slug / SEO title / meta description / hidden / indexable), `wix_export_page` (whole-page WML serialization)
 **Content:** `wix_page_structure` (find componentIds + current text; accepts `masterPage` for header/footer), `wix_get_text`, `wix_set_text`, `wix_set_texts` (batch)
-**Images:** `wix_find_images`, `wix_set_image` (swap media uri, set alt text — Builder.Image and classic WPhoto shapes)
+**Images:** `wix_find_images`, `wix_set_image` (swap media uri, set alt text — Builder.Image and classic WPhoto shapes), `wix_upload_image` (local file or URL → Media Manager, optionally placed on a component in one step)
 **Links & buttons:** `wix_find_links`, `wix_set_link` (page / external / phone / email / anchor links + button labels)
 **Components:** `wix_copy_component` (serialize+add any component subtree across pages), `wix_delete_component`, `wix_set_layout` (move/resize)
 **Galleries:** `wix_find_galleries` (list Pro Gallery cards `wix_page_structure` can't see), `wix_set_gallery` (retext gallery cards)
 **SEO/schema:** `wix_add_schema` (per-page JSON-LD), `wix_site_seo` (site title/description/indexing), `wix_redirects` (301 redirect manager), `wix_head_tags` (site-wide head HTML)
 **Navigation:** `wix_nav_menu`, `wix_nav_add`, `wix_nav_remove`
-**Site & safety:** `wix_undo` / redo, `wix_set_homepage`, `wix_theme` (palette + fonts, to keep generated content on-brand)
+**Site & safety:** `wix_undo` / redo, `wix_set_homepage`, `wix_theme` (palette + fonts, to keep generated content on-brand), `wix_favicon`, `wix_page_background`, `wix_popups` (lightboxes: list/add/open/close), `wix_mobile_optimize` (re-run mobile layout after heavy edits), `wix_component_style` (raw style read/write — mind GlobalStyles)
 **Persistence:** `wix_save` (draft only), `wix_publish` (LIVE — requires `confirm:true`)
 **Escape hatch:** `wix_eval` (raw JS with `ds` + `e2e` in scope)
 
@@ -92,6 +92,10 @@ Either way, from then on every tool works unattended.
 - Component links (buttons, images) take **bare page ids** (`{type:'PageLink', pageId:'abc12'}`) while menu links take **`#`-prefixed ids** (`{type:'PageLink', pageId:'#abc12'}`). Yes, really.
 - `ds.importExport.pages.wml.export(pageRef)` works (note: takes a page *reference*, not an id) and returns `{structure, data, style, version}` — but the matching **`add`/`replace` importers return page pointers without ever materializing content** in the current editor build (three live attempts). Export is exposed as `wix_export_page`; for templating, use `wix_duplicate_page` + `wix_copy_component`.
 - `ds.seo.redirectUrls` is a working 301 redirect manager: `update({'/old':'/new'})`, `remove(['/old'])`, `get()` — verified with a live round-trip.
+- **Media upload** is a two-step dance: `ds.generalInfo.media.getSiteUploadToken()` in the editor, then `GET files.wix.com/site/media/files/upload/url?media_type=picture&site_token=…` **with the browser session's cookies** (401 without them — the server reuses Playwright's cookie jar), then multipart-POST the file to the returned `upload_url`. The response's `file_name` is the media uri image components want.
+- **Many components share a `GlobalStyle`** (e.g. every primary button uses style id `button-primary`) — `ds.components.style.update` on one restyles them ALL. Fork first (`ds.components.style.fork(ref)`) to restyle a single component.
+- `ds.pages.background.get(pageId)` throws `unknown device for background` — the device arg (`'desktop'`/`'mobile'`) is mandatory.
+- Popups/lightboxes are pages: `ds.pages.popupPages.add(title)` returns a page pointer, they show up in `getDataList()`, and `ds.pages.remove(popupId)` deletes them.
 
 ## Safety
 

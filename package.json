@@ -1,6 +1,6 @@
 {
   "name": "wix-editor-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that drives the Wix (classic/Harmony) Editor via its internal documentServices API — page create/duplicate/delete, text edits, SEO, nav menu, save, publish. Built for sites where Wix offers no page API.",
   "type": "module",
   "main": "server.js",

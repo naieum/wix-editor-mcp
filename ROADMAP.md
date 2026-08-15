@@ -12,12 +12,17 @@ Gap analysis from introspecting the full `documentServices` surface on a live cl
 6. ⚠️ **Page export** — `wix_export_page` ships (WML export verified); **import does not**: `importExport.pages.wml.add/replace` return page pointers but never materialize content in the current editor build (three live attempts). Templating = `wix_duplicate_page` + `wix_copy_component`. Re-test import on future editor builds.
 7. ✅ **Safety & site** — `wix_undo`/redo, `wix_set_homepage`, `wix_theme` (palette + fonts).
 
+## Shipped in v0.3.0
+
+- ✅ **Media upload** — `wix_upload_image` (local file or URL → Media Manager via the token + cookie-jar flow, optional one-step placement on a component). Verified with a live upload.
+- ✅ **Favicon** (`wix_favicon`), **page background** (`wix_page_background` — device arg mandatory), **lightboxes/popups** (`wix_popups`: list/add/open/close; delete via `wix_delete_page`), **mobile re-optimization** (`wix_mobile_optimize`).
+- ✅ **Component styles** — `wix_component_style` raw read/write, with the GlobalStyle shared-style warning (fork via `wix_eval` to restyle one component).
+
 ## Still open
 
-- **Media upload glue** — `ds.generalInfo.media.getSiteUploadToken()` exists; wiring an upload→place flow would remove the "uri must already be in the media manager" limitation of `wix_set_image`.
-- **Favicon, page background, lightboxes/popups** (`ds.favicon`, `ds.pages.background`, `ds.pages.popupPages`), **mobile re-optimization** (`ds.mobileAlgo.runForPage`), `ds.viewMode` switching — all present in DS, thin wrappers away.
-- **Component styles** — `ds.components.style.get/update` + `ds.components.design` for on-brand restyling beyond layout.
 - **WML import** — revisit `importExport.pages.wml.add/replace` on newer editor builds; it's the missing half of the templating story.
+- `ds.viewMode` switching + mobile-specific component editing (`ds.mobile.hiddenComponents`) — niche; reachable via `wix_eval`.
+- Wix Studio support — Studio exposes a documentServices-like surface; untested here. PRs welcome.
 
 ## Deliberately out of scope
 
