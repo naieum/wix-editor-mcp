@@ -182,33 +182,65 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 8. `wix_save`, then screenshot to review, then `wix_publish {confirm:true}` when the owner says go.
 9. Verify the live URL (title tag, content, no stray sections) after ~1-2 min propagation.
 
-## API notes (documentServices and the data gateway)
+## FAQ
 
-Behaviors of the internal APIs that the tools already account for. Read them before dropping to `wix_eval`, which bypasses the tools.
+Common questions about Wix quirks the tools already handle. The internal details behind them are in [For `wix_eval` and contributors](#for-wix_eval-and-contributors).
 
-- `documentServices` lives in a **same-origin child frame**, not the top window. `__OdeditorE2EApi__` (which has `addPage`) is on the top window.
-- **Await `ds.waitForChangesAppliedAsync()` after every mutation.** DS applies changes async, so reads race otherwise.
-- A page's components are only readable while the editor is **rendering that page**. Call `ds.pages.navigateTo(pageId)` first. Otherwise you only see masterPage header/footer components.
-- Text on newer components lives at `data.richText.text` (`Builder.RichText`). Classic components use `data.text`. **Partial nested updates are silently ignored.** Send the full `richText` object back with only `.text` changed.
-- `ds.menu.removeItem(menuId, itemId)` needs **both args**. The 1-arg form silently no-ops. In the same family, `ds.mainMenu.addLinkItem` creates an orphaned dataItem that never attaches. Use `ds.menu.addItem('CUSTOM_MAIN_MENU', {...})`.
-- `ds.save(onSuccess, onError)` is callback-style and saves the **draft**. The live site changes only on `ds.publish`.
-- **SEO title/description are rendered from `advancedSeoData`, NOT the legacy `pageTitleSEO`/`descriptionSEO` fields.** `advancedSeoData` is a JSON *string* that holds `{tags:[{type:"title",children},{type:"meta",props:{name:"description",content}},{type:"script",...JSON-LD...}]}`. A **duplicated page inherits the source page's tags verbatim** (title, description, AND schema). The new page silently shows the source page's title until you rewrite these tags. `wix_update_page` and `wix_add_schema` handle this for you. Via `wix_eval`: parse, edit the tags, `JSON.stringify`, then `ds.pages.data.update(id,{advancedSeoData})`.
-- **Pro Gallery (FastGallery) cards are invisible to component traversal.** Their titles and descriptions live in `component.data.items[]`, not as child text comps. `wix_page_structure` misses them. Use `wix_find_galleries` / `wix_set_gallery`.
-- **A duplicated page auto-creates a nav menu item** for itself, so skip `wix_nav_add` after a duplicate.
-- **A duplicated section** copies its whole subtree, galleries included. `ds.components.duplicate(sectionRef, pageContainerRef)` needs the container as the 2nd arg. After you clone a section for new content, remove any inherited gallery or child you do not want.
-- A change to a WRichText's inline tag (e.g. `<h1>` to `<h2>`) **changes the semantic tag without shrinking the display styling**. This is a safe way to fix multiple-H1 pages.
-- **Header/footer content does NOT live inside `SITE_HEADER`/`SITE_FOOTER`** (those containers report no children). It lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`. `masterPage` is itself walkable via `ds.pages.getReference('masterPage')` from any page. The structure, image, and link tools accept `pageId: "masterPage"` for this.
-- Newer image components nest their media under **`data.image` (`Builder.Image`)**. Classic `WPhoto` keeps it flat on `data`. Same partial-update trap as richText: send the **full nested `image` object** back with only the changed fields replaced. `wix_set_image` handles both.
-- Component links (buttons, images) take **bare page ids** (`{type:'PageLink', pageId:'abc12'}`). Menu links take **`#`-prefixed ids** (`{type:'PageLink', pageId:'#abc12'}`).
-- `ds.importExport.pages.wml.export(pageRef)` works (note: it takes a page *reference*, not an id) and returns `{structure, data, style, version}`. But the matching **`add`/`replace` importers return page pointers without ever materializing content** in the current editor build (three live attempts). Export ships as `wix_export_page`. For templating, use `wix_duplicate_page` plus `wix_copy_component`.
-- `ds.seo.redirectUrls` is a working 301 redirect manager: `update({'/old':'/new'})`, `remove(['/old'])`, `get()`. Verified with a live round-trip.
-- **Media upload** takes two steps. Call `ds.generalInfo.media.getSiteUploadToken()` in the editor. Then `GET files.wix.com/site/media/files/upload/url?media_type=picture&site_token=…` **with the browser session's cookies** (401 without them, so the server reuses Playwright's cookie jar). Then multipart-POST the file to the returned `upload_url`. The response's `file_name` is the media uri that image components want.
-- **Many components share a `GlobalStyle`** (e.g. every primary button uses style id `button-primary`). `ds.components.style.update` on one restyles them ALL. Fork first (`ds.components.style.fork(ref)`) to restyle a single component.
-- `ds.pages.background.get(pageId)` throws `unknown device for background`. The device arg (`'desktop'`/`'mobile'`) is mandatory.
-- Popups/lightboxes are pages. `ds.pages.popupPages.add(title)` returns a page pointer, they show up in `getDataList()`, and `ds.pages.remove(popupId)` deletes them.
-- **CMS/Blog/business data live behind `manage.wix.com/_api`, not documentServices.** Session cookies alone return 401/403 there. The fix (verified): read a signed app instance token from the editor (`ds.tpa.app.getDataByAppDefId(appDefId).instance`) and send it as `Authorization`, plus the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN`. Any app's instance authorizes the whole data gateway. `wix_collections`, `wix_blog`, and `wix_business_info` do this for you.
-- **CMS items are LIVE data, no publish step.** `cloud-data/v2` writes (`wix_collections` insert/update) take effect at once. An item bound to a dynamic page shows on the public site immediately, unlike editor draft changes.
-- **Blog `update`/`create` act on the DRAFT.** New posts stay private until `wix_blog {action:'publish', confirm:true}`. The `site-properties/v4` write endpoint rejects every payload shape tried, so `wix_business_info` is read-only. Set business fields in the Wix dashboard.
+### Text and content
+
+**Why did my text edit silently not apply?** Newer components (`Builder.RichText`) store text at `data.richText.text`. Classic ones use `data.text`. Partial nested updates are ignored, so the full `richText` object must go back with only `.text` changed. `wix_set_text` handles both shapes. Images have the same trap under `data.image`, and `wix_set_image` handles it too.
+
+**Why don't the tools show my Pro Gallery text?** Pro Gallery (FastGallery) card titles and descriptions live in `component.data.items[]`, not as child text components, so `wix_page_structure` cannot see them. Use `wix_find_galleries` to list the cards and `wix_set_gallery` to edit them.
+
+**Why can't I read a page's components?** They are only readable while the editor is rendering that page. The tools call `ds.pages.navigateTo(pageId)` first. Before that you only see the masterPage header and footer.
+
+### Pages and sections
+
+**Do I need to add a nav item after duplicating a page?** No. Duplicating a page auto-creates a nav menu item, so do not also call `wix_nav_add`.
+
+**What happens when I duplicate a section?** It copies the whole subtree, galleries included. When you clone a section for new content, remove any inherited gallery or child you do not want with `wix_delete_component`.
+
+**How do I edit the header or footer?** Their content is not inside `SITE_HEADER`/`SITE_FOOTER` (those report no children). It lives in sibling `HeaderSection`/`FooterSection` components under `masterPage`. Pass `pageId: "masterPage"` to the structure, image, and link tools.
+
+**Can I import or export a page as a file?** Export yes, via `wix_export_page` (WML JSON). Import no: the WML importers return page pointers but do not materialize content in the current editor build. To copy a page's design, use `wix_duplicate_page` plus `wix_copy_component`.
+
+### SEO
+
+**Why does my new page show the wrong SEO title?** Wix renders the SEO title and description from `advancedSeoData`, not the legacy `pageTitleSEO`/`descriptionSEO` fields. A duplicated page inherits the source page's tags verbatim (title, description, and schema), so it keeps showing the source's title until you rewrite them. `wix_update_page` and `wix_add_schema` do this for you.
+
+**How do I fix a page with more than one H1?** Change the rich-text inline tag (e.g. `<h1>` to `<h2>`). That changes the semantic tag without changing the visible size.
+
+### Links and menus
+
+**Why doesn't my button or menu link work?** They take different id formats. Component links (buttons, images) use bare page ids (`{type:'PageLink', pageId:'abc12'}`). Menu links use `#`-prefixed ids (`{type:'PageLink', pageId:'#abc12'}`).
+
+**Why didn't removing a menu item do anything?** `ds.menu.removeItem` needs both `menuId` and `itemId`. The one-argument form silently does nothing. `wix_nav_remove` passes both.
+
+### Styling
+
+**Why did styling one button change all of them?** Many components share a `GlobalStyle` (every primary button uses `button-primary`, for example), so updating it restyles all of them. To change one component only, fork its style first with `ds.components.style.fork(ref)` via `wix_eval`.
+
+### Saving and publishing
+
+**Does saving change the live site?** No. `wix_save` writes the draft only. The public site changes only when you run `wix_publish`, which requires `confirm:true`.
+
+**Are CMS items and new blog posts public right away?** CMS items are live data with no publish step, so a `wix_collections` insert or update shows on the public site at once (an item bound to a dynamic page appears immediately). Blog `create` and `update` act on a private draft. A post goes public only on `wix_blog {action:'publish', confirm:true}`.
+
+**Can I edit the business name, phone, or hours?** Only read them, with `wix_business_info`. The `site-properties/v4` write endpoint rejects every payload shape tried, so set these fields in the Wix dashboard (Settings → Business Info).
+
+## For `wix_eval` and contributors
+
+Internal details behind the FAQ, for anyone dropping to `wix_eval` or extending the server.
+
+- **Two API surfaces.** `documentServices` (`ds`) is in a same-origin child frame. `__OdeditorE2EApi__` (`e2e`, which has `addPage`) is on the top window. `wix_eval` exposes both.
+- **Changes are async.** documentServices applies mutations asynchronously, so reads race. Await `ds.waitForChangesAppliedAsync()` after every mutation.
+- **SEO data shape.** `advancedSeoData` is a JSON *string* holding `{tags:[{type:"title",children},{type:"meta",props:{name:"description",content}},{type:"script",...JSON-LD...}]}`. Via `wix_eval`: parse, edit the tags, `JSON.stringify`, then `ds.pages.data.update(id,{advancedSeoData})`.
+- **Duplicating a section** needs the container as the second arg: `ds.components.duplicate(sectionRef, pageContainerRef)`.
+- **Data-gateway auth.** Session cookies alone get 401/403 on `manage.wix.com/_api`. Read a signed app instance token from the editor (`ds.tpa.app.getDataByAppDefId(appDefId).instance`), send it as `Authorization`, and add the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN`. Any app's instance authorizes the whole gateway.
+- **Media upload** takes two steps: `ds.generalInfo.media.getSiteUploadToken()` in the editor, then a token-and-cookie request to `files.wix.com/site/media/files/upload/url`, then a multipart POST to the returned `upload_url`. The response's `file_name` is the media uri image components want. `wix_upload_image` handles it.
+- **301 redirects:** `ds.seo.redirectUrls` supports `update({'/old':'/new'})`, `remove(['/old'])`, `get()`. Exposed as `wix_redirects`.
+- **Page background:** `ds.pages.background.get(pageId)` throws without a device arg (`'desktop'`/`'mobile'`). That arg is mandatory.
+- **Popups are pages:** `ds.pages.popupPages.add(title)` returns a page pointer, popups show up in `getDataList()`, and `ds.pages.remove(popupId)` deletes them.
 
 ## Safety
 
@@ -218,7 +250,7 @@ Behaviors of the internal APIs that the tools already account for. Read them bef
 
 ## Compatibility
 
-Built and verified against the **classic Wix Editor** ("Harmony" / Odeditor) in August 2026. Not for Wix Studio or ADI editors. Their internals differ, though Studio also exposes a documentServices-like surface (PRs welcome). Internal APIs can change without notice. If a tool stops working, use `wix_eval` with the API notes above to debug.
+Built and verified against the **classic Wix Editor** ("Harmony" / Odeditor) in August 2026. Not for Wix Studio or ADI editors. Their internals differ, though Studio also exposes a documentServices-like surface (PRs welcome). Internal APIs can change without notice. If a tool stops working, use `wix_eval` with the notes above to debug.
 
 ## License
 
