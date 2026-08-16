@@ -155,7 +155,7 @@ Same content as the official Wix REST APIs, driven from this server's own editor
 |---|---|
 | `wix_collections` | Wix Data CMS: list/query/get/insert/update/remove items |
 | `wix_blog` | Blog posts: list/get/create/update/publish/delete |
-| `wix_business_info` | Read business name, hours, locale (read-only) |
+| `wix_business_info` | Read business info; update name and description |
 
 ### Persistence
 
@@ -297,9 +297,9 @@ CMS items are live data with no publish step, so a `wix_collections` insert or u
 </details>
 
 <details>
-<summary><strong>Can I edit the business name, phone, or hours?</strong></summary>
+<summary><strong>Can I edit the business name or description?</strong></summary>
 
-Only read them, with `wix_business_info`. The `site-properties/v4` write endpoint rejects every payload shape tried, so set these fields in the Wix dashboard (Settings → Business Info).
+Yes. `wix_business_info` writes `businessName` and `shortDescription` through the `business-settings/v3` service (the one the dashboard uses; `site-properties/v4` rejects these writes, which is why the field went through a different service). Phone, hours, logo, and address stay read-only here. Set those in the Wix dashboard (Settings → Business Info).
 
 </details>
 

@@ -24,13 +24,17 @@ The `manage.wix.com/_api` data gateway (the ground the official Wix REST APIs co
 
 - ✅ **CMS (Wix Data):** `wix_collections` list/query/get/insert/update/remove items in any collection. Update merges against current data, so partial field writes are safe.
 - ✅ **Blog:** `wix_blog` list published posts, get/create/update/delete drafts, publish (confirm-gated).
-- ✅ **Business info:** `wix_business_info` reads the real business name, description, locale, timezone, and currency. Read-only: the site-properties write endpoint rejects every payload shape tried.
+- ✅ **Business info:** `wix_business_info` reads the real business name, description, locale, timezone, and currency.
 - Auth: a signed app instance token from the editor plus the XSRF cookie authorizes the whole gateway (see README gotchas). No second OAuth flow.
+
+## Shipped in v0.4.1
+
+- ✅ **Business-info write:** `wix_business_info` now updates `businessName` and `shortDescription`. The dashboard writes these via `business-settings/v3/{metaSiteId}/business-info` (not `site-properties/v4`, which is why earlier attempts were rejected). Verified live: the write mirrors into site properties, so the read reflects it at once.
+- ✅ **Blog publish verified:** `wix_blog {action:'publish'}` confirmed live end to end (draft → publish → public post → removed).
+- ✅ **Blog delete fixed:** `wix_blog {action:'delete'}` now removes both the public post and its draft record. Deleting only the draft used to leave the post, and deleting only the post left an orphan draft.
 
 ## Still open
 
-- **Business-info write:** the `site-properties/v4` PATCH rejects every payload shape tried (2026-08). Crack the shape (capture a real dashboard save) to make `wix_business_info` read/write.
-- **Blog publish:** `wix_blog {action:'publish'}` uses the standard `draft-posts/{id}/publish` call but is the one path not round-trip-verified live (to avoid a test post flashing on the public feed). Confirm on first real use.
 - **WML import:** re-tested 2026-08-15 and still broken. `importExport.pages.wml.add(wml)` returns a page pointer, but the new page has 0 components (content never materializes). Blocked by the Wix build, not our code. Retry on future builds; it is the missing half of the templating story.
 - **View mode / mobile editing:** re-tested 2026-08-15. `ds.viewMode` exposes `get`/`set`/`VIEW_MODES` (DESKTOP, MOBILE), but `ds.viewMode.set('MOBILE')` is a silent no-op (the mode stays DESKTOP), and `ds.mobile` is undefined (no `hiddenComponents` API on this build). No working path to mobile-specific editing here yet.
 - Wix Studio support: Studio exposes a documentServices-like surface, untested here (Cornerstone is a classic-editor site, so there is no Studio site to verify against). PRs welcome.

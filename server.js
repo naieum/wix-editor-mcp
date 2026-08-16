@@ -195,7 +195,7 @@ async function wixManageApi(method, apiPath, { body, headers } = {}) {
 // ---------------------------------------------------------------------------
 // MCP server + tools
 // ---------------------------------------------------------------------------
-const server = new McpServer({ name: "wix-editor", version: "0.4.0" });
+const server = new McpServer({ name: "wix-editor", version: "0.4.1" });
 
 function tool(name, description, schema, handler) {
   server.registerTool(name, { description, inputSchema: schema }, async (args) => {
@@ -1403,7 +1403,7 @@ tool(
 
 tool(
   "wix_blog",
-  "Read/write Wix Blog posts (also outside documentServices). action 'list' returns published posts (id/title/slug/url); 'get' fetches a post's editable draft by id; 'create' makes a new DRAFT (title required, optional excerpt/richContent); 'update' patches a draft's fields; 'publish' takes a draft live (requires confirm:true); 'delete' removes a draft/post. New posts stay private drafts until you publish. richContent is Wix's Ricos JSON; omit it to create a title-only draft you fill in the dashboard.",
+  "Read/write Wix Blog posts (also outside documentServices). action 'list' returns published posts (id/title/slug/url); 'get' fetches a post's editable draft by id; 'create' makes a new DRAFT (title required, optional excerpt/richContent); 'update' patches a draft's fields; 'publish' takes a draft live (requires confirm:true, verified live); 'delete' removes both the public post and its draft record. New posts stay private drafts until you publish. richContent is Wix's Ricos JSON; omit it to create a title-only draft you fill in the dashboard.",
   {
     action: z.enum(["list", "get", "create", "update", "publish", "delete"]),
     postId: z.string().optional().describe("Draft/post id. Required for get/update/publish/delete."),
@@ -1447,17 +1447,35 @@ tool(
     }
     if (action === "delete") {
       if (!postId) throw new Error("postId is required for 'delete'.");
-      await wixManageApi("delete", `${B}/draft-posts/${encodeURIComponent(postId)}`);
-      return text({ ok: true, deleted: postId });
+      // A published post keeps a draft record. Deleting only the draft leaves the public
+      // post; deleting only the post leaves an orphan draft. Remove both by the same id
+      // (post id == draft id). A 404 on either half just means that half was not there.
+      const id = encodeURIComponent(postId);
+      const notes = [];
+      try { await wixManageApi("delete", `${B}/posts/${id}`); } catch (e) { if (!/404/.test(e.message)) notes.push("post: " + e.message); }
+      try { await wixManageApi("delete", `${B}/draft-posts/${id}`); } catch (e) { if (!/404/.test(e.message)) notes.push("draft: " + e.message); }
+      return text({ ok: true, deleted: postId, notes: notes.length ? notes : undefined });
     }
   }
 );
 
 tool(
   "wix_business_info",
-  "Read the site's business info (name, description, logo, locale, timezone, currency, categories) from Wix site properties, so generated content can use the real business name and details. Read-only: the site-properties write endpoint rejects every payload shape tried (2026-08), so set these fields in the Wix dashboard (Settings → Business Info).",
-  {},
-  async () => {
+  "Read or update the site's business info. No args reads name, description, logo, locale, timezone, currency, and categories. Pass businessName and/or shortDescription to update them (written via the Wix business-settings service and mirrored to site properties; verified live). Logo, currency, locale, and address stay read-only here — set those in the Wix dashboard (Settings → Business Info).",
+  {
+    businessName: z.string().optional().describe("New business name"),
+    shortDescription: z.string().optional().describe("New short business description (the tagline, ≤150 chars)"),
+  },
+  async ({ businessName, shortDescription }) => {
+    if (businessName !== undefined || shortDescription !== undefined) {
+      const msid = await inEditor((ds) => ds.generalInfo.getMetaSiteId());
+      // The dashboard writes business info here, always with primaryLocationFieldMap.
+      // This POST also mirrors the change into site properties (verified live).
+      const body = { primaryLocationFieldMap: [] };
+      if (businessName !== undefined) body.businessName = businessName;
+      if (shortDescription !== undefined) body.shortDescription = shortDescription;
+      await wixManageApi("post", `business-settings/v3/${msid}/business-info`, { body });
+    }
     const j = await wixManageApi("get", "site-properties-service/v4/properties");
     const p = j.properties || {};
     return text({

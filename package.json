@@ -1,6 +1,6 @@
 {
   "name": "wix-editor-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP server for the classic Wix Editor (Harmony/Odeditor). Create and edit pages, text, images, SEO, navigation, CMS collections, and blog posts through the editor's internal documentServices API and the Wix data gateway. Playwright-driven, for sites where Wix has no public page API.",
   "type": "module",
   "main": "server.js",
