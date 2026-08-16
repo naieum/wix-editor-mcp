@@ -31,9 +31,9 @@ The `manage.wix.com/_api` data gateway (the ground the official Wix REST APIs co
 
 - **Business-info write:** the `site-properties/v4` PATCH rejects every payload shape tried (2026-08). Crack the shape (capture a real dashboard save) to make `wix_business_info` read/write.
 - **Blog publish:** `wix_blog {action:'publish'}` uses the standard `draft-posts/{id}/publish` call but is the one path not round-trip-verified live (to avoid a test post flashing on the public feed). Confirm on first real use.
-- **WML import:** revisit `importExport.pages.wml.add/replace` on newer editor builds. It is the missing half of the templating story.
-- `ds.viewMode` switching and mobile-specific component editing (`ds.mobile.hiddenComponents`): niche, and reachable via `wix_eval`.
-- Wix Studio support: Studio exposes a documentServices-like surface, untested here. PRs welcome.
+- **WML import:** re-tested 2026-08-15 and still broken. `importExport.pages.wml.add(wml)` returns a page pointer, but the new page has 0 components (content never materializes). Blocked by the Wix build, not our code. Retry on future builds; it is the missing half of the templating story.
+- **View mode / mobile editing:** re-tested 2026-08-15. `ds.viewMode` exposes `get`/`set`/`VIEW_MODES` (DESKTOP, MOBILE), but `ds.viewMode.set('MOBILE')` is a silent no-op (the mode stays DESKTOP), and `ds.mobile` is undefined (no `hiddenComponents` API on this build). No working path to mobile-specific editing here yet.
+- Wix Studio support: Studio exposes a documentServices-like surface, untested here (Cornerstone is a classic-editor site, so there is no Studio site to verify against). PRs welcome.
 
 ## Deliberately out of scope
 
